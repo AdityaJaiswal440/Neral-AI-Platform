@@ -1,4 +1,4 @@
-# ◈ The Churn Project
+# ◈ Neral AI - Universal Hybrid Churn Intelligence (UHCI)
 
 **An Open-Source Product from GSV Vadodara**
 
