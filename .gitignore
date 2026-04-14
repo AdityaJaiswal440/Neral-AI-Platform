@@ -208,7 +208,7 @@ __marimo__/
 
 
 # Ignore Datasets
-data/
+
 *.csv
 *.xlsx
 
