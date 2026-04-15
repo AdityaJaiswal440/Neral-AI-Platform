@@ -44,3 +44,17 @@ The project is split into two environments: the React frontend and the FastAPI b
 cd frontend
 npm install
 npm run dev
+
+
+---
+title: Neral AI Backend
+emoji: 📉
+colorFrom: blue
+colorTo: red
+sdk: docker
+app_port: 8000
+pinned: false
+---
+
+# Neral AI: Hybrid Churn Intelligence Platform
+This is the unified backend for the HCIM system, managing Aviation and E-commerce churn logic with SHAP interpretability.
