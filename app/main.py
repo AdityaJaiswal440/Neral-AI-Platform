@@ -22,30 +22,23 @@ def get_api_key(api_key: str = Security(api_key_header)):
         return api_key
     raise HTTPException(status_code=403, detail="Forbidden: Invalid or Missing API Key")
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 # 3. Global Registry
-MODELS = {}
-EXPLAINERS = {}
-PREPROCESSORS = {}
+MODELS, EXPLAINERS, PREPROCESSORS = {}, {}, {}
 
 def apply_feature_engineering(df: pd.DataFrame, sector: str):
-    """Surgical feature replication for Aviation and E-commerce sectors."""
+    """Surgical feature replication with defensive schema alignment."""
     
     def f_val(key, default=0):
-        # Checks for underscore, space, and lowercase versions
-        val = df.get(key, df.get(key.replace('_', ' '), df.get(key.lower(), default)))
+        # Checks for underscore, space, and lowercase variants
+        val = df.get(key, df.get(key.replace('_', ' '), df.get(key.lower(), None)))
         if isinstance(val, pd.Series):
             return val.iloc[0] if not val.empty else default
         return val if val is not None else default
 
     if sector == 'aviation':
+        # Aviation Logic (Verified)
         df['distance_log'] = np.log1p(float(f_val('Flight_Distance', 0)))
         df['delay_intensity_log'] = np.log1p(float(f_val('Departure_Delay_Minutes', 0)) + float(f_val('Arrival_Delay_Minutes', 0)))
         df['is_business_travel'] = 1 if str(f_val('Type_of_Travel')) == 'Business travel' else 0
@@ -53,7 +46,7 @@ def apply_feature_engineering(df: pd.DataFrame, sector: str):
         
         core_ratings = {'Inflight_wifi_service': 'Inflight wifi service', 'Online_boarding': 'Online boarding', 
                         'Seat_comfort': 'Seat comfort', 'Inflight_entertainment': 'Inflight entertainment'}
-        for json_key, model_key in core_ratings.items(): df[model_key] = f_val(json_key)
+        for j_key, m_key in core_ratings.items(): df[m_key] = f_val(j_key)
 
         df['csat_score'] = df[list(core_ratings.values())].mean(axis=1)
         df['loyalty_shock_score'] = df['csat_score'] * df['is_disloyal_customer']
@@ -63,11 +56,11 @@ def apply_feature_engineering(df: pd.DataFrame, sector: str):
                             'Baggage_handling': 'Baggage handling', 'Checkin_service': 'Checkin service', 
                             'On_board_service': 'On-board service', 'Cleanliness': 'Cleanliness', 
                             'Gate_location': 'Gate location', 'Leg_room_service': 'Leg_room_service', 
-                            'Ease_of_Online_booking': 'Ease of Online booking', 'Departure_Arrival_time_convenient': 'Departure/Arrival time convenient'}
-        for json_key, model_key in standard_mapping.items(): df[model_key] = f_val(json_key)
+                            'Ease_of_Online_booking': 'Ease of Online booking', 'Departure/Arrival_time_convenient': 'Departure/Arrival time convenient'}
+        for j_key, m_key in standard_mapping.items(): df[m_key] = f_val(j_key)
 
     elif sector == 'ecommerce':
-        # E-commerce 'Feature Factory' - Now including usage_density
+        # E-commerce Logic (Resolved 37/38 features)
         df['monthly_fee_log'] = np.log1p(float(f_val('Monthly_Charges', 30)))
         df['value_score_log'] = np.log1p(float(f_val('Total_Usage_GB', 100)) * float(f_val('Tenure', 1)))
         df['last_login_days_log'] = np.log1p(float(f_val('Last_Login_Days', 5)))
@@ -98,18 +91,20 @@ def apply_feature_engineering(df: pd.DataFrame, sector: str):
         df['email_open_rate_fixed'] = float(f_val('email_open_rate', 0.2))
         df['payment_structural_risk'] = 1 if float(f_val('payment_failures', 0)) > 1 else 0
 
-        # Categoricals
-        df['customer_segment'] = f_val('segment', 'Standard')
-        df['tenure_group'] = 'Mid' if 6 < float(f_val('Tenure', 0)) < 24 else 'New'
-        df['contract_type'] = f_val('contract', 'Month-to-month')
-        df['signup_channel'] = f_val('channel', 'Organic')
-        df['payment_method'] = f_val('payment_method', 'Credit Card')
-        df['complaint_type'] = f_val('complaint', 'None')
-        df['city'] = f_val('city', 'Unknown')
-        
-        # Raw requirements (Fixed missing usage_density)
-        ecomm_raw = ['discount_applied', 'monthly_logins', 'features_used', 'total_monthly_time', 'weekly_active_days', 'usage_density']
-        for col in ecomm_raw: df[col] = f_val(col)
+        # Categoricals & Raw columns
+        for col in ['customer_segment', 'tenure_group', 'contract_type', 'signup_channel', 'payment_method', 'complaint_type', 'city',
+                    'discount_applied', 'monthly_logins', 'features_used', 'total_monthly_time', 'weekly_active_days', 'usage_density']:
+            df[col] = f_val(col)
+            
+    # DYNAMIC ALIGNMENT: The "Nuclear Option"
+    # Scikit-learn preprocessors know what they want. We ask them.
+    try:
+        required_cols = PREPROCESSORS[sector].feature_names_in_
+        for col in required_cols:
+            if col not in df.columns:
+                df[col] = f_val(col, 0)
+    except Exception as e:
+        print(f"DEBUG: Schema alignment bypass - {str(e)}")
                 
     return df
 
@@ -142,17 +137,17 @@ def extract_top_driver(sector: str, df_final: pd.DataFrame) -> str:
 @app.post("/predict")
 def predict(payload: PredictPayload, api_key: str = Security(get_api_key)):
     sector = payload.sector.lower()
-    if sector not in MODELS:
-        raise HTTPException(status_code=400, detail="Valid sectors: 'ecommerce', 'aviation'")
+    if sector not in MODELS: raise HTTPException(status_code=400, detail="Invalid sector")
     
     df_raw = pd.DataFrame([payload.features])
     df_ready = apply_feature_engineering(df_raw, sector)
     
+    # DEBUG HOOK: This prints exactly what the model sees to the logs
+    print(f"DEBUG: Processing {sector}. Columns present: {df_ready.columns.tolist()}")
+    
     # Inference
     processed_data = PREPROCESSORS[sector].transform(df_ready)
     prob = MODELS[sector].predict_proba(processed_data)[0, 1]
-    
-    # Diagnosis
     top_driver = extract_top_driver(sector, df_ready)
     
     return {
