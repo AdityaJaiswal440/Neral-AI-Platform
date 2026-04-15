@@ -36,33 +36,48 @@ EXPLAINERS = {}
 PREPROCESSORS = {}
 
 def apply_feature_engineering(df: pd.DataFrame, sector: str):
-    """Replicates training logic with fallback for both underscores and spaces."""
+    """Replicates training logic with explicit existence guarantees."""
     if sector == 'aviation':
-        # Helper to get values regardless of naming convention
-        def f(key): return df.get(key, df.get(key.replace('_', ' '), 3))
+        # Helper to get scalar values safely and fix FutureWarnings
+        def f_val(key, default=3):
+            val = df.get(key, df.get(key.replace('_', ' '), default))
+            if isinstance(val, pd.Series):
+                return val.iloc[0] if not val.empty else default
+            return val if val is not None else default
 
         # 1. Log Transformations
-        df['distance_log'] = np.log1p(float(f('Flight_Distance')))
-        df['delay_intensity_log'] = np.log1p(float(f('Departure_Delay_Minutes')) + float(f('Arrival_Delay_Minutes')))
+        df['distance_log'] = np.log1p(float(f_val('Flight_Distance', 0)))
+        df['delay_intensity_log'] = np.log1p(float(f_val('Departure_Delay_Minutes', 0)) + float(f_val('Arrival_Delay_Minutes', 0)))
 
         # 2. Categorical Flags
-        df['is_business_travel'] = 1 if str(f('Type_of_Travel')) == 'Business travel' else 0
-        df['is_disloyal_customer'] = 1 if str(f('Customer_Type')) == 'disloyal Customer' else 0
+        df['is_business_travel'] = 1 if str(f_val('Type_of_Travel')) == 'Business travel' else 0
+        df['is_disloyal_customer'] = 1 if str(f_val('Customer_Type')) == 'disloyal Customer' else 0
 
-        # 3. Score Logic
-        rating_cols = ['Inflight_wifi_service', 'Online_boarding', 'Seat_comfort', 'Inflight_entertainment']
-        ratings = [float(f(c)) for c in rating_cols]
-        df['csat_score'] = sum(ratings) / len(ratings)
-        df['loyalty_shock_score'] = df['csat_score'] * df['is_disloyal_customer']
-        df['service_friction_score'] = (5 - float(f('Inflight_wifi_service'))) + (5 - float(f('Online_boarding')))
+        # 3. Score Logic & Column Existence Guarantee
+        # These are the "Raw" features the model expects (with spaces eventually)
+        core_ratings = {
+            'Inflight_wifi_service': 'Inflight wifi service',
+            'Online_boarding': 'Online boarding',
+            'Seat_comfort': 'Seat comfort',
+            'Inflight_entertainment': 'Inflight entertainment'
+        }
         
-        # 4. Fill missing raw columns that the model expects
+        # Ensure they exist in df as the model expects them
+        for json_key, model_key in core_ratings.items():
+            df[model_key] = f_val(json_key)
+
+        # Calculate CSAT using the now-guaranteed columns
+        df['csat_score'] = df[list(core_ratings.values())].mean(axis=1)
+        df['loyalty_shock_score'] = df['csat_score'] * df['is_disloyal_customer']
+        df['service_friction_score'] = (5 - df['Inflight wifi service']) + (5 - df['Online boarding'])
+        
+        # 4. Standard features mapping (ensuring hyphen and space consistency)
         standard_mapping = {
             'Inflight_service': 'Inflight service',
             'Food_and_drink': 'Food and drink',
             'Baggage_handling': 'Baggage handling',
             'Checkin_service': 'Checkin service',
-            'On_board_service': 'On-board service', # Note the hyphen!
+            'On_board_service': 'On-board service',
             'Cleanliness': 'Cleanliness',
             'Gate_location': 'Gate location',
             'Leg_room_service': 'Leg room service',
@@ -70,8 +85,7 @@ def apply_feature_engineering(df: pd.DataFrame, sector: str):
             'Departure/Arrival_time_convenient': 'Departure/Arrival time convenient'
         }
         for json_key, model_key in standard_mapping.items():
-            if model_key not in df.columns:
-                df[model_key] = f(json_key)
+            df[model_key] = f_val(json_key)
                 
     return df
 
@@ -101,28 +115,20 @@ def extract_top_driver(sector: str, df_final: pd.DataFrame) -> str:
     return features_clean[top_idx]
 
 @app.post("/v1/predict")
+@app.post("/predict")
 def predict(payload: PredictPayload, api_key: str = Security(get_api_key)):
     sector = payload.sector.lower()
     df_raw = pd.DataFrame([payload.features])
     
-    # 1. Engineering (Creates columns with underscores like loyalty_shock_score)
-    df_engineered = apply_feature_engineering(df_raw, sector)
+    # 1. Engineering (This now guarantees all 18+ columns exist with correct names)
+    df_ready = apply_feature_engineering(df_raw, sector)
     
-    # 2. SURGICAL RENAME: Only rename the raw features, NOT the engineered ones
-    rename_map = {
-        'Inflight_wifi_service': 'Inflight wifi service',
-        'Online_boarding': 'Online boarding',
-        'Inflight_entertainment': 'Inflight entertainment',
-        'Seat_comfort': 'Seat comfort'
-    }
-    df_engineered.rename(columns=rename_map, inplace=True)
-    
-    # 3. Inference
-    processed_data = PREPROCESSORS[sector].transform(df_engineered)
+    # 2. Inference
+    processed_data = PREPROCESSORS[sector].transform(df_ready)
     prob = MODELS[sector].predict_proba(processed_data)[0, 1]
     
-    # 4. Diagnosis
-    top_driver = extract_top_driver(sector, df_engineered)
+    # 3. Diagnosis
+    top_driver = extract_top_driver(sector, df_ready)
     
     return {
         "prediction_id": str(uuid.uuid4()),
