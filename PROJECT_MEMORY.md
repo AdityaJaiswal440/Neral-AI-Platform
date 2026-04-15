@@ -1,50 +1,51 @@
 # Hybrid Churn Intelligence Model (HCIM)
-## [SOURCE OF TRUTH - THREE-SECTOR SHIELD]
+## [SOURCE OF TRUTH - PHASE 2: MODELING IGNITION]
 
 ---
 
-## 1. Project Scope
+## 1. Project Scope & Datasets
 - **Sectors:** E-commerce, Streaming, and Aviation.
-- **Datasets:**
- 1.`customer_churn_business_dataset.csv` (E-comm + Streaming)
-    2. `Hybrid_Aviation_Churn_Integrated.csv` (Aviation)
-- **Objective:** Cross-sector churn prediction using a unified Behavioral Foundry.
+- **Primary Data Assets:**
+    1. `customer_churn_business_dataset.csv` (E-comm + Streaming)
+    2. `Hybrid_Aviation_Churn_Integrated.csv` (Aviation - Authentic Survey Data)
+- **Objective:** Cross-sector churn prediction using a unified Behavioral Foundry and Cost-Sensitive XGBoost logic.
 
 ---
 
-## 2. The Behavioral Foundry (Feature Set)
-We use Agnostic Signals to bridge the gap between sectors:
-- **Economic/Transaction:** `monthly_fee_log`, `value_score_log`.
-- **Friction/Service:** `support_intensity_log` (E-comm), `service_friction_score` (Aviation).
-- **Loyalty/Nexus:** `loyalty_shock_score` (All sectors).
-- **Engagement:** `usage_density` (Streaming), `engagement_efficiency` (Aviation).
+## 2. The Behavioral Foundry (Core Signals)
+Agnostic signals forged to bridge the "Friction-Loyalty Nexus":
+- **Economic Intensity:** `monthly_fee_log`, `value_score_log`.
+- **Friction Vectors:** `support_intensity_log` (E-comm), `service_friction_score` (Aviation).
+- **Loyalty Anchors:** `loyalty_shock_score` (All), `loyalty_resilience` (Aviation).
+- **Engagement Density:** `usage_density` (Streaming), `engagement_efficiency` (Aviation).
 
 ---
 
-## 3. Current Project Stage: [PHASE 2 - COMPARATIVE MODELING]
+## 3. Current Project Stage: [PHASE 2 - MODELING]
 
 ### ✅ PHASE 1: DATA PREPARATION (COMPLETED)
-- **E-comm/Streaming:** Original dataset processed, imbalanced logic applied.
-- **Aviation:** Authentic survey-based data integrated, demographics purged.
-- **Cleaning:** All datasets are now "Log-Normalized" and "Surgically Purged."
+- **Aviation:** Reconstructed using authentic logs; demographics (Age/Gender) purged.
+- **E-comm/Streaming:** Synthesized behavioral features integrated; 9:1 imbalance confirmed.
 
 ### 🏗️ PHASE 2: MODELING (ACTIVE)
-- **Task 1:** Train the HCIM Engine on the **Aviation** dataset (High feature richness).
-- **Task 2:** Train the HCIM Engine on the **E-comm/Streaming** dataset (High imbalance).
-- **Goal:** Compare SHAP values across sectors to see if "Friction" is a universal predictor.
+- **Task 1 (Aviation):** Ready for balanced baseline training (Standard weighting).
+- **Task 2 (E-comm/Streaming):** - **Stratified 80/20 Split:** COMPLETED (Maintains ~10.2% churn ratio).
+    - **SPW Calculation:** COMPLETED (Dynamic `scale_pos_weight` = 8.79).
+- **Current Task:** Execute `model.fit()` and optimize for **Recall** using `eval_metric='aucpr'`.
 
 ---
 
-## 4. Active Workspace Handshake
-- **Target Variable:** `churn` (Binary 0/1).
+## 4. Active Workspace Handshake (Antigravity Context)
+- **Target:** `churn` (Binary 0/1).
 - **Engine:** XGBoost (Extreme Gradient Boosting).
-- **Validation:** SHAP summary plots are mandatory for every sector run.
+- **Model Parameters:** - `scale_pos_weight`: 8.79 (For E-comm) / 1.0 (For Aviation).
+    - `eval_metric`: 'aucpr' (Focus on Precision-Recall Curve).
+- **Validation:** SHAP Summary Plots are MANDATORY for transparency.
 
 ---
 
-## 5. HCIM Coding Instructions
-- **Persona:** Senior AI Researcher / Data Architect.
-- **Standards:** - No Demographics (Age/Gender).
-    - Use Stratified 80/20 splits.
-    - For E-comm/Streaming: Use `scale_pos_weight`.
-    - For Aviation: Use standard weighting (Balanced data).
+## 5. HCIM Executive Instructions (Persona: Data Architect)
+- **Recall-First Mandate:** In an imbalanced 9:1 world, Accuracy is a "Liar." We prioritize catching the churner over global accuracy.
+- **No Demographics:** Never suggest modeling based on Age, Gender, or Location. Focus exclusively on **Behavior and Friction**.
+- **Mathematical Integrity:** Always use Stratified splits to prevent sampling bias.
+- **Explainability:** No training is final until SHAP identifies the "Why" behind the "Who."

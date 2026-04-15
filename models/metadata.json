@@ -1,0 +1,77 @@
+[
+    {
+        "model_id": "HCIM-Ecomm-Streaming-V1",
+        "sector": "E-commerce/Streaming",
+        "dataset_source": "df_clean (E-comm specific signals)",
+        "performance_metrics": {
+            "recall": 0.8431,
+            "f1_score": 0.3815
+        },
+        "tuning_params": {
+            "max_depth": 3,
+            "scale_pos_weight": 10,
+            "learning_rate": 0.01
+        },
+        "features_used": [
+            "monthly_logins",
+            "weekly_active_days",
+            "usage_density",
+            "total_monthly_time",
+            "session_strength_log",
+            "features_used",
+            "feature_intensity_log",
+            "usage_growth_rate",
+            "is_slow_ghost",
+            "last_login_days_log",
+            "is_recency_danger",
+            "monthly_fee_log",
+            "value_score_log",
+            "payment_failures_clipped",
+            "is_high_friction_payment",
+            "payment_structural_risk",
+            "loyalty_shock_score",
+            "support_intensity_log",
+            "support_tickets_clipped",
+            "is_zombie_user",
+            "is_bouncer",
+            "discount_applied",
+            "is_hidden_dissatisfaction",
+            "escalations_clipped",
+            "email_open_rate_fixed",
+            "engagement_efficiency",
+            "nps_normalized",
+            "loyalty_resilience",
+            "is_passive_promoter",
+            "referral_count_clipped",
+            "is_advocate",
+            "csat_score",
+            "city",
+            "signup_channel",
+            "payment_method",
+            "tenure_group",
+            "complaint_type",
+            "customer_segment",
+            "contract_type"
+        ]
+    },
+    {
+        "model_id": "HCIM-Aviation-V1",
+        "sector": "Aviation",
+        "dataset_source": "Hybrid_Aviation_Churn_Integrated",
+        "performance_metrics": {
+            "recall": 0.9999,
+            "f1_score": 0.964
+        },
+        "tuning_params": {
+            "max_depth": 3,
+            "scale_pos_weight": 10,
+            "learning_rate": 0.01,
+            "subsample": 0.8
+        },
+        "top_drivers": [
+            "Inflight wifi service",
+            "Online boarding",
+            "Inflight entertainment"
+        ]
+    }
+]

@@ -1,0 +1,34 @@
+{
+  "summary": [
+    {
+      "Model Name": "LogisticRegression",
+      "Test Accuracy": 0.7305,
+      "Recall (Class 1)": 0.6862745098039216,
+      "F1-Score (Class 1)": 0.3418803418803419
+    },
+    {
+      "Model Name": "DecisionTreeClassifier",
+      "Test Accuracy": 0.8415,
+      "Recall (Class 1)": 0.23039215686274508,
+      "F1-Score (Class 1)": 0.22871046228710462
+    },
+    {
+      "Model Name": "RandomForestClassifier",
+      "Test Accuracy": 0.897,
+      "Recall (Class 1)": 0.0,
+      "F1-Score (Class 1)": 0.0
+    },
+    {
+      "Model Name": "AdaBoostClassifier",
+      "Test Accuracy": 0.899,
+      "Recall (Class 1)": 0.17647058823529413,
+      "F1-Score (Class 1)": 0.26277372262773724
+    }
+  ],
+  "reports": {
+    "LogisticRegression": "              precision    recall  f1-score   support\n\n           0       0.95      0.74      0.83      1796\n           1       0.23      0.69      0.34       204\n\n    accuracy                           0.73      2000\n   macro avg       0.59      0.71      0.59      2000\nweighted avg       0.88      0.73      0.78      2000\n",
+    "DecisionTreeClassifier": "              precision    recall  f1-score   support\n\n           0       0.91      0.91      0.91      1796\n           1       0.23      0.23      0.23       204\n\n    accuracy                           0.84      2000\n   macro avg       0.57      0.57      0.57      2000\nweighted avg       0.84      0.84      0.84      2000\n",
+    "RandomForestClassifier": "              precision    recall  f1-score   support\n\n           0       0.90      1.00      0.95      1796\n           1       0.00      0.00      0.00       204\n\n    accuracy                           0.90      2000\n   macro avg       0.45      0.50      0.47      2000\nweighted avg       0.81      0.90      0.85      2000\n",
+    "AdaBoostClassifier": "              precision    recall  f1-score   support\n\n           0       0.91      0.98      0.95      1796\n           1       0.51      0.18      0.26       204\n\n    accuracy                           0.90      2000\n   macro avg       0.71      0.58      0.60      2000\nweighted avg       0.87      0.90      0.88      2000\n"
+  }
+}
