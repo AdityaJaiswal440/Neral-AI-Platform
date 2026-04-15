@@ -35,51 +35,49 @@ MODELS = {}
 EXPLAINERS = {}
 PREPROCESSORS = {}
 
-def apply_feature_engineering(df_clean: pd.DataFrame, sector: str):
-    """Replicates training logic using keys from the incoming JSON (underscores)."""
+def apply_feature_engineering(df: pd.DataFrame, sector: str):
+    """Replicates training logic with fallback for both underscores and spaces."""
     if sector == 'aviation':
+        # Helper to get values regardless of naming convention
+        def f(key): return df.get(key, df.get(key.replace('_', ' '), 3))
+
         # 1. Log Transformations
-        df_clean['distance_log'] = np.log1p(df_clean.get('Flight_Distance', 0))
-        dep_delay = df_clean.get('Departure_Delay_Minutes', 0)
-        arr_delay = df_clean.get('Arrival_Delay_Minutes', 0)
-        df_clean['delay_intensity_log'] = np.log1p(dep_delay + arr_delay)
+        df['distance_log'] = np.log1p(float(f('Flight_Distance')))
+        df['delay_intensity_log'] = np.log1p(float(f('Departure_Delay_Minutes')) + float(f('Arrival_Delay_Minutes')))
 
-        # 2. Categorical Encoding (Fixed the Boolean .astype error)
-        # We use .eq() to ensure we compare the Series, not a scalar None
-        df_clean['is_business_travel'] = df_clean.get('Type_of_Travel', pd.Series([""])).eq('Business travel').astype(int)
-        df_clean['is_disloyal_customer'] = df_clean.get('Customer_Type', pd.Series([""])).eq('disloyal Customer').astype(int)
+        # 2. Categorical Flags
+        df['is_business_travel'] = 1 if str(f('Type_of_Travel')) == 'Business travel' else 0
+        df['is_disloyal_customer'] = 1 if str(f('Customer_Type')) == 'disloyal Customer' else 0
 
-        # 3. Score Logic (Using underscores to match JSON)
+        # 3. Score Logic
         rating_cols = ['Inflight_wifi_service', 'Online_boarding', 'Seat_comfort', 'Inflight_entertainment']
-        for col in rating_cols:
-            if col not in df_clean.columns: df_clean[col] = 3
-            
-        df_clean['csat_score'] = df_clean[rating_cols].mean(axis=1)
-        df_clean['loyalty_shock_score'] = df_clean['csat_score'] * df_clean['is_disloyal_customer']
+        ratings = [float(f(c)) for c in rating_cols]
+        df['csat_score'] = sum(ratings) / len(ratings)
+        df['loyalty_shock_score'] = df['csat_score'] * df['is_disloyal_customer']
+        df['service_friction_score'] = (5 - float(f('Inflight_wifi_service'))) + (5 - float(f('Online_boarding')))
         
-        wifi = df_clean.get('Inflight_wifi_service', 3)
-        boarding = df_clean.get('Online_boarding', 3)
-        df_clean['service_friction_score'] = (5 - wifi) + (5 - boarding)
-        
-        # 4. Final consistency check for standard columns
-        standard_cols = [
-            'Inflight_service', 'Food_and_drink', 'Baggage_handling', 
-            'Checkin_service', 'On_board_service', 'Cleanliness', 
-            'Gate_location', 'Leg_room_service', 'Ease_of_Online_booking', 
-            'Departure/Arrival_time_convenient'
-        ]
-        for col in standard_cols:
-            if col not in df_clean.columns: df_clean[col] = 3
+        # 4. Fill missing raw columns that the model expects
+        standard_mapping = {
+            'Inflight_service': 'Inflight service',
+            'Food_and_drink': 'Food and drink',
+            'Baggage_handling': 'Baggage handling',
+            'Checkin_service': 'Checkin service',
+            'On_board_service': 'On-board service', # Note the hyphen!
+            'Cleanliness': 'Cleanliness',
+            'Gate_location': 'Gate location',
+            'Leg_room_service': 'Leg room service',
+            'Ease_of_Online_booking': 'Ease of Online booking',
+            'Departure/Arrival_time_convenient': 'Departure/Arrival time convenient'
+        }
+        for json_key, model_key in standard_mapping.items():
+            if model_key not in df.columns:
+                df[model_key] = f(json_key)
                 
-    return df_clean
+    return df
 
 @app.on_event("startup")
 def load_models():
-    sectors = {
-        'ecommerce': 'models/hcim_E-comm_Stream_v1.joblib',
-        'aviation': 'models/hcim_Aviation_v1.joblib'
-    }
-    
+    sectors = {'ecommerce': 'models/hcim_E-comm_Stream_v1.joblib', 'aviation': 'models/hcim_Aviation_v1.joblib'}
     for sector, path in sectors.items():
         if os.path.exists(path):
             pipeline = joblib.load(path)
@@ -87,70 +85,50 @@ def load_models():
             PREPROCESSORS[sector] = pipeline.named_steps['preprocessor']
             EXPLAINERS[sector] = shap.Explainer(MODELS[sector])
             print(f"Loaded {sector} logic...")
-        else:
-            print(f"WARNING: Model not found at {path}")
     print("Unified Core Online. 16GB Memory Engine Engaged.")
 
 class PredictPayload(BaseModel):
     sector: str
     features: Dict[str, Any]
 
-def extract_top_driver(sector: str, df_engineered: pd.DataFrame) -> str:
-    """Uses the final renamed data to generate SHAP explanations."""
-    transformed = PREPROCESSORS[sector].transform(df_engineered)
+def extract_top_driver(sector: str, df_final: pd.DataFrame) -> str:
+    transformed = PREPROCESSORS[sector].transform(df_final)
     all_feat = PREPROCESSORS[sector].get_feature_names_out()
     features_clean = [f.split('__')[1] if '__' in f else f for f in all_feat]
-    df_final = pd.DataFrame(transformed, columns=features_clean)
-    
-    shap_vals = EXPLAINERS[sector](df_final)
-    abs_shaps = np.abs(shap_vals.values[0])
-    top_idx = np.argmax(abs_shaps)
+    df_shap = pd.DataFrame(transformed, columns=features_clean)
+    shap_vals = EXPLAINERS[sector](df_shap)
+    top_idx = np.argmax(np.abs(shap_vals.values[0]))
     return features_clean[top_idx]
 
 @app.post("/v1/predict")
-@app.post("/predict")
 def predict(payload: PredictPayload, api_key: str = Security(get_api_key)):
     sector = payload.sector.lower()
-    if sector not in MODELS:
-        raise HTTPException(status_code=400, detail="Valid sectors: 'ecommerce', 'aviation'")
-    
-    # 1. Create DataFrame from raw features (keeps underscores)
     df_raw = pd.DataFrame([payload.features])
     
-    # 2. STEP 1: Feature Engineering (Finds underscores)
+    # 1. Engineering (Creates columns with underscores like loyalty_shock_score)
     df_engineered = apply_feature_engineering(df_raw, sector)
     
-    # 3. STEP 2: Standardize names for the Model/Transformer (Underscore -> Space)
-    # This ensures "Inflight_wifi_service" becomes "Inflight wifi service"
-    df_engineered.columns = [c.replace('_', ' ') for c in df_engineered.columns]
+    # 2. SURGICAL RENAME: Only rename the raw features, NOT the engineered ones
+    rename_map = {
+        'Inflight_wifi_service': 'Inflight wifi service',
+        'Online_boarding': 'Online boarding',
+        'Inflight_entertainment': 'Inflight entertainment',
+        'Seat_comfort': 'Seat comfort'
+    }
+    df_engineered.rename(columns=rename_map, inplace=True)
     
-    # 4. Inference
-    prob = MODELS[sector].predict_proba(PREPROCESSORS[sector].transform(df_engineered))[0, 1]
+    # 3. Inference
+    processed_data = PREPROCESSORS[sector].transform(df_engineered)
+    prob = MODELS[sector].predict_proba(processed_data)[0, 1]
     
-    # 5. Interpretability
+    # 4. Diagnosis
     top_driver = extract_top_driver(sector, df_engineered)
-    
-    # 6. Prescriptive Logic
-    rescue_action = "Standard Review"
-    driver_low = top_driver.lower()
-    
-    if sector == 'ecommerce':
-        if 'loyalty' in driver_low: rescue_action = "Retention Discount (Price Lock) - 20%"
-        elif 'usage' in driver_low: rescue_action = "Engagement Nudge (Onboarding Specialist)"
-        elif 'csat' in driver_low: rescue_action = "Service Recovery (VIP Ticket)"
-    elif sector == 'aviation':
-        if 'wifi' in driver_low or 'boarding' in driver_low:
-            rescue_action = "Executive Concierge (Digital Friction Override)"
-        elif 'delay' in driver_low:
-            rescue_action = "Flight Comp (Lounge Access / Upgrade)"
-        elif 'seat' in driver_low or 'food' in driver_low:
-            rescue_action = "Amenity Upgrade (Premium Comp)"
     
     return {
         "prediction_id": str(uuid.uuid4()),
         "probability": round(float(prob), 4),
         "trigger_diagnosis": top_driver,
-        "prescriptive_rescue": rescue_action,
+        "prescriptive_rescue": "Executive Concierge" if prob > 0.5 else "Standard Review",
         "status": "success"
     }
 
