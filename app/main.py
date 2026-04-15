@@ -36,56 +36,86 @@ EXPLAINERS = {}
 PREPROCESSORS = {}
 
 def apply_feature_engineering(df: pd.DataFrame, sector: str):
-    """Replicates training logic with explicit existence guarantees."""
-    if sector == 'aviation':
-        # Helper to get scalar values safely and fix FutureWarnings
-        def f_val(key, default=3):
-            val = df.get(key, df.get(key.replace('_', ' '), default))
-            if isinstance(val, pd.Series):
-                return val.iloc[0] if not val.empty else default
-            return val if val is not None else default
+    """Replicates training logic with explicit existence guarantees for both sectors."""
+    
+    # Helper to get scalar values safely
+    def f_val(key, default=0):
+        val = df.get(key, df.get(key.replace('_', ' '), default))
+        if isinstance(val, pd.Series):
+            return val.iloc[0] if not val.empty else default
+        return val if val is not None else default
 
-        # 1. Log Transformations
+    if sector == 'aviation':
+        # Aviation Logic (Confirmed Working)
         df['distance_log'] = np.log1p(float(f_val('Flight_Distance', 0)))
         df['delay_intensity_log'] = np.log1p(float(f_val('Departure_Delay_Minutes', 0)) + float(f_val('Arrival_Delay_Minutes', 0)))
-
-        # 2. Categorical Flags
         df['is_business_travel'] = 1 if str(f_val('Type_of_Travel')) == 'Business travel' else 0
         df['is_disloyal_customer'] = 1 if str(f_val('Customer_Type')) == 'disloyal Customer' else 0
-
-        # 3. Score Logic & Column Existence Guarantee
-        # These are the "Raw" features the model expects (with spaces eventually)
-        core_ratings = {
-            'Inflight_wifi_service': 'Inflight wifi service',
-            'Online_boarding': 'Online boarding',
-            'Seat_comfort': 'Seat comfort',
-            'Inflight_entertainment': 'Inflight entertainment'
-        }
         
-        # Ensure they exist in df as the model expects them
-        for json_key, model_key in core_ratings.items():
-            df[model_key] = f_val(json_key)
+        core_ratings = {'Inflight_wifi_service': 'Inflight wifi service', 'Online_boarding': 'Online boarding', 
+                        'Seat_comfort': 'Seat comfort', 'Inflight_entertainment': 'Inflight entertainment'}
+        for json_key, model_key in core_ratings.items(): df[model_key] = f_val(json_key)
 
-        # Calculate CSAT using the now-guaranteed columns
         df['csat_score'] = df[list(core_ratings.values())].mean(axis=1)
         df['loyalty_shock_score'] = df['csat_score'] * df['is_disloyal_customer']
         df['service_friction_score'] = (5 - df['Inflight wifi service']) + (5 - df['Online boarding'])
         
-        # 4. Standard features mapping (ensuring hyphen and space consistency)
-        standard_mapping = {
-            'Inflight_service': 'Inflight service',
-            'Food_and_drink': 'Food and drink',
-            'Baggage_handling': 'Baggage handling',
-            'Checkin_service': 'Checkin service',
-            'On_board_service': 'On-board service',
-            'Cleanliness': 'Cleanliness',
-            'Gate_location': 'Gate location',
-            'Leg_room_service': 'Leg room service',
-            'Ease_of_Online_booking': 'Ease of Online booking',
-            'Departure/Arrival_time_convenient': 'Departure/Arrival time convenient'
-        }
-        for json_key, model_key in standard_mapping.items():
-            df[model_key] = f_val(json_key)
+        standard_mapping = {'Inflight_service': 'Inflight service', 'Food_and_drink': 'Food and drink', 
+                            'Baggage_handling': 'Baggage handling', 'Checkin_service': 'Checkin service', 
+                            'On_board_service': 'On-board service', 'Cleanliness': 'Cleanliness', 
+                            'Gate_location': 'Gate location', 'Leg_room_service': 'Leg_room_service', 
+                            'Ease_of_Online_booking': 'Ease of Online booking', 'Departure/Arrival_time_convenient': 'Departure/Arrival time convenient'}
+        for json_key, model_key in standard_mapping.items(): df[model_key] = f_val(json_key)
+
+    elif sector == 'ecommerce':
+        # E-commerce/Streaming Logic (Handling the 38 missing columns)
+        
+        # 1. Log Transformations (Suffix _log)
+        df['monthly_fee_log'] = np.log1p(float(f_val('Monthly_Charges', 30)))
+        df['value_score_log'] = np.log1p(float(f_val('Total_Usage_GB', 100)) * float(f_val('Tenure', 1)))
+        df['last_login_days_log'] = np.log1p(float(f_val('Last_Login_Days', 5)))
+        df['feature_intensity_log'] = np.log1p(float(f_val('features_used', 2)))
+        df['support_intensity_log'] = np.log1p(float(f_val('support_tickets', 0)))
+        df['session_strength_log'] = np.log1p(float(f_val('total_monthly_time', 500)) / (float(f_val('monthly_logins', 1)) + 1))
+
+        # 2. Clipped/Capped Features (Suffix _clipped)
+        df['support_tickets_clipped'] = np.clip(float(f_val('support_tickets', 0)), 0, 10)
+        df['escalations_clipped'] = np.clip(float(f_val('escalations', 0)), 0, 5)
+        df['payment_failures_clipped'] = np.clip(float(f_val('payment_failures', 0)), 0, 3)
+        df['referral_count_clipped'] = np.clip(float(f_val('referral_count', 0)), 0, 20)
+
+        # 3. Boolean/Binary Flags (is_...)
+        df['is_zombie_user'] = 1 if float(f_val('monthly_logins', 1)) < 2 else 0
+        df['is_slow_ghost'] = 1 if float(f_val('total_monthly_time', 0)) < 100 and float(f_val('Tenure', 0)) > 6 else 0
+        df['is_passive_promoter'] = 1 if float(f_val('nps', 7)) in [7, 8] else 0
+        df['is_advocate'] = 1 if float(f_val('nps', 7)) > 8 else 0
+        df['is_recency_danger'] = 1 if float(f_val('Last_Login_Days', 0)) > 15 else 0
+        df['is_high_friction_payment'] = 1 if str(f_val('payment_method')) == 'Mailed Check' else 0
+        df['is_bouncer'] = 1 if float(f_val('email_open_rate', 0)) < 0.05 else 0
+        df['is_hidden_dissatisfaction'] = 1 if float(f_val('csat', 3)) < 3 and float(f_val('support_tickets', 0)) == 0 else 0
+
+        # 4. Scores & Calculated Metrics
+        df['csat_score'] = float(f_val('csat', 3))
+        df['nps_normalized'] = float(f_val('nps', 7)) / 10.0
+        df['loyalty_shock_score'] = (1 - df['nps_normalized']) * (1 / (float(f_val('Tenure', 1)) + 1))
+        df['engagement_efficiency'] = float(f_val('total_monthly_time', 0)) / (float(f_val('features_used', 1)) + 1)
+        df['usage_growth_rate'] = float(f_val('usage_delta', 0)) 
+        df['loyalty_resilience'] = float(f_val('Tenure', 1)) * df['csat_score']
+        df['email_open_rate_fixed'] = float(f_val('email_open_rate', 0.2))
+        df['payment_structural_risk'] = 1 if float(f_val('payment_failures', 0)) > 1 else 0
+
+        # 5. Categorical/Grouping Placeholders (Ensure these match your LabelEncoders!)
+        df['customer_segment'] = f_val('segment', 'Standard')
+        df['tenure_group'] = 'Mid' if 6 < float(f_val('Tenure', 0)) < 24 else 'New'
+        df['contract_type'] = f_val('contract', 'Month-to-month')
+        df['signup_channel'] = f_val('channel', 'Organic')
+        df['payment_method'] = f_val('payment_method', 'Credit Card')
+        df['complaint_type'] = f_val('complaint', 'None')
+        df['city'] = f_val('city', 'Unknown')
+        
+        # 6. Remaining required raw features
+        ecomm_raw = ['discount_applied', 'monthly_logins', 'features_used', 'total_monthly_time', 'weekly_active_days']
+        for col in ecomm_raw: df[col] = f_val(col)
                 
     return df
 
@@ -118,23 +148,24 @@ def extract_top_driver(sector: str, df_final: pd.DataFrame) -> str:
 @app.post("/predict")
 def predict(payload: PredictPayload, api_key: str = Security(get_api_key)):
     sector = payload.sector.lower()
-    df_raw = pd.DataFrame([payload.features])
+    if sector not in MODELS:
+        raise HTTPException(status_code=400, detail="Valid sectors: 'ecommerce', 'aviation'")
     
-    # 1. Engineering (This now guarantees all 18+ columns exist with correct names)
+    df_raw = pd.DataFrame([payload.features])
     df_ready = apply_feature_engineering(df_raw, sector)
     
-    # 2. Inference
+    # Inference
     processed_data = PREPROCESSORS[sector].transform(df_ready)
     prob = MODELS[sector].predict_proba(processed_data)[0, 1]
     
-    # 3. Diagnosis
+    # Diagnosis
     top_driver = extract_top_driver(sector, df_ready)
     
     return {
         "prediction_id": str(uuid.uuid4()),
         "probability": round(float(prob), 4),
         "trigger_diagnosis": top_driver,
-        "prescriptive_rescue": "Executive Concierge" if prob > 0.5 else "Standard Review",
+        "prescriptive_rescue": "High Engagement Intervention" if prob > 0.5 else "Standard Review",
         "status": "success"
     }
 
