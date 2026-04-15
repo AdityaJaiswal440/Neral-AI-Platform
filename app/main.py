@@ -1,32 +1,27 @@
 import os
-from fastapi import FastAPI, HTTPException, Security, Depends
-from fastapi.security.api_key import APIKeyHeader
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, ConfigDict
-from typing import Dict, Any
 import joblib
 import pandas as pd
 import numpy as np
 import shap
 import uuid
-from sklearn.pipeline import Pipeline
-from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException, Security
+from fastapi.security.api_key import APIKeyHeader
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from typing import Dict, Any
 
-load_dotenv()
-
-app = FastAPI(title="HCIM Unified Inference API", version="1.0")
-
-# Security Layer Initialization
-API_KEY = os.getenv("API_KEY", "NERAL_SECRET_2026")
+# 1. Configuration & Security
+API_KEY = os.getenv("NERAL_SECRET", "NERAL_SECRET_2026")
 api_key_header = APIKeyHeader(name="x-api-key", auto_error=False)
 
+app = FastAPI(title="Neral AI: Hybrid Churn Intelligence", version="1.0")
+
+# 2. Security Layer
 def get_api_key(api_key: str = Security(api_key_header)):
     if api_key == API_KEY:
         return api_key
     raise HTTPException(status_code=403, detail="Forbidden: Invalid or Missing API Key")
 
-# CORS Middleware Layer
-# To restrict payload to our secure Front-end URL later, change allow_origins=["*"] to allow_origins=["https://neral-ai.com"]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -35,84 +30,127 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Global Models Dictionary
+# 3. Global Registry
 MODELS = {}
 EXPLAINERS = {}
 PREPROCESSORS = {}
 
+def apply_feature_engineering(df_clean: pd.DataFrame, sector: str):
+    """Replicates the exact feature engineering from the training notebook."""
+    if sector == 'aviation':
+        # Log Transformations
+        df_clean['distance_log'] = np.log1p(df_clean.get('Flight_Distance', 0))
+        # Handle cases where Arrival_Delay might be missing in payload
+        arrival_delay = df_clean.get('Arrival_Delay_Minutes', 0)
+        departure_delay = df_clean.get('Departure_Delay_Minutes', 0)
+        df_clean['delay_intensity_log'] = np.log1p(departure_delay + arrival_delay)
+
+        # Categorical Encoding
+        df_clean['is_business_travel'] = (df_clean.get('Type_of_Travel') == 'Business travel').astype(int)
+        df_clean['is_disloyal_customer'] = (df_clean.get('Customer_Type') == 'disloyal Customer').astype(int)
+
+        # Score Logic
+        rating_cols = ['Inflight wifi service', 'Online boarding', 'Seat comfort', 'Inflight entertainment']
+        # Fill missing ratings with neutral (3) before calculating mean
+        for col in rating_cols:
+            if col not in df_clean.columns: df_clean[col] = 3
+            
+        df_clean['csat_score'] = df_clean[rating_cols].mean(axis=1)
+        df_clean['loyalty_shock_score'] = df_clean['csat_score'] * df_clean['is_disloyal_customer']
+        df_clean['service_friction_score'] = (5 - df_clean.get('Inflight wifi service', 3)) + (5 - df_clean.get('Online boarding', 3))
+        
+        # Fill standard columns to satisfy ColumnTransformer requirements
+        standard_cols = [
+            'Inflight service', 'Food and drink', 'Baggage handling', 
+            'Checkin service', 'On-board service', 'Cleanliness', 
+            'Gate location', 'Leg room service', 'Ease of Online booking', 
+            'Departure/Arrival time convenient'
+        ]
+        for col in standard_cols:
+            if col not in df_clean.columns:
+                df_clean[col] = 3 
+                
+    return df_clean
+
 @app.on_event("startup")
 def load_models():
-    # Environment-agnostic model paths for Docker portability
-    ecomm_path = os.getenv("MODEL_PATH_ECOMM", "models/hcim_E-comm_Stream_v1.joblib")
-    aviation_path = os.getenv("MODEL_PATH_AVIATION", "models/hcim_Aviation_v1.joblib")
+    sectors = {
+        'ecommerce': 'models/hcim_E-comm_Stream_v1.joblib',
+        'aviation': 'models/hcim_Aviation_v1.joblib'
+    }
     
-    ecomm_pipeline = joblib.load(ecomm_path)
-    MODELS['ecommerce'] = ecomm_pipeline.named_steps['classifier']
-    PREPROCESSORS['ecommerce'] = ecomm_pipeline.named_steps['preprocessor']
-    EXPLAINERS['ecommerce'] = shap.Explainer(MODELS['ecommerce'])
-    
-    aviation_pipeline = joblib.load(aviation_path)
-    MODELS['aviation'] = aviation_pipeline.named_steps['classifier']
-    PREPROCESSORS['aviation'] = aviation_pipeline.named_steps['preprocessor']
-    EXPLAINERS['aviation'] = shap.Explainer(MODELS['aviation'])
-    
-    print("Unified Core Online. Models locked in memory.")
+    for sector, path in sectors.items():
+        if os.path.exists(path):
+            pipeline = joblib.load(path)
+            MODELS[sector] = pipeline.named_steps['classifier']
+            PREPROCESSORS[sector] = pipeline.named_steps['preprocessor']
+            EXPLAINERS[sector] = shap.Explainer(MODELS[sector])
+            print(f"Loaded {sector} logic...")
+        else:
+            print(f"WARNING: Model not found at {path}")
+    print("Unified Core Online. 16GB Memory Engine Engaged.")
 
 class PredictPayload(BaseModel):
     sector: str
-    data: Dict[str, Any]
+    features: Dict[str, Any]
 
-def extract_top_driver(sector: str, df_raw: pd.DataFrame) -> str:
-    transformed = PREPROCESSORS[sector].transform(df_raw)
+def extract_top_driver(sector: str, df_engineered: pd.DataFrame) -> str:
+    """Uses engineered data to generate SHAP explanations."""
+    transformed = PREPROCESSORS[sector].transform(df_engineered)
     all_feat = PREPROCESSORS[sector].get_feature_names_out()
     features_clean = [f.split('__')[1] if '__' in f else f for f in all_feat]
-    df_clean = pd.DataFrame(transformed, columns=features_clean)
+    df_final = pd.DataFrame(transformed, columns=features_clean)
     
-    shap_vals = EXPLAINERS[sector](df_clean)
+    shap_vals = EXPLAINERS[sector](df_final)
     abs_shaps = np.abs(shap_vals.values[0])
     top_idx = np.argmax(abs_shaps)
     return features_clean[top_idx]
 
-# Endpoint secured behind get_api_key validation layer
+@app.post("/v1/predict")
 @app.post("/predict")
 def predict(payload: PredictPayload, api_key: str = Security(get_api_key)):
     sector = payload.sector.lower()
     if sector not in MODELS:
-        raise HTTPException(status_code=400, detail="Sector must be 'ecommerce' or 'aviation'")
+        raise HTTPException(status_code=400, detail="Valid sectors: 'ecommerce', 'aviation'")
     
-    raw_dict = payload.data
-    df_raw = pd.DataFrame([raw_dict])
+    # 1. Convert payload to DataFrame
+    df_raw = pd.DataFrame([payload.features])
     
+    # 2. Map underscores to spaces for Aviation compatibility
     if sector == 'aviation':
-        df_raw.columns = [c.replace('_', ' ') if c in ['Inflight_wifi_service', 'Online_boarding', 'Inflight_entertainment', 'Seat_comfort', 'Food_and_drink', 'On-board_service', 'Leg_room_service', 'Baggage_handling', 'Checkin_service', 'Inflight_service', 'Gate_location', 'Departure/Arrival_time_convenient', 'Ease_of_Online_booking'] else c for c in df_raw.columns]
+        df_raw.columns = [c.replace('_', ' ') for c in df_raw.columns]
     
-    pipeline = Pipeline(steps=[('preprocessor', PREPROCESSORS[sector]), ('classifier', MODELS[sector])])
-    prob = pipeline.predict_proba(df_raw)[0, 1]
+    # 3. CRITICAL: Apply Feature Engineering
+    df_ready = apply_feature_engineering(df_raw, sector)
     
-    top_driver = extract_top_driver(sector, df_raw)
+    # 4. Inference
+    prob = MODELS[sector].predict_proba(PREPROCESSORS[sector].transform(df_ready))[0, 1]
+    
+    # 5. Interpretability (Using engineered data)
+    top_driver = extract_top_driver(sector, df_ready)
+    
+    # 6. Prescriptive Logic
     rescue_action = "Standard Review"
+    driver_low = top_driver.lower()
     
     if sector == 'ecommerce':
-        if 'loyalty_shock' in top_driver.lower():
-            rescue_action = "Retention Discount (Price Lock) - 20%"
-        elif 'usage_density' in top_driver.lower():
-            rescue_action = "Engagement Nudge (Onboarding Specialist)"
-        elif 'csat' in top_driver.lower():
-            rescue_action = "Service Recovery (VIP Ticket)"
-            
+        if 'loyalty' in driver_low: rescue_action = "Retention Discount (Price Lock) - 20%"
+        elif 'usage' in driver_low: rescue_action = "Engagement Nudge (Onboarding Specialist)"
+        elif 'csat' in driver_low: rescue_action = "Service Recovery (VIP Ticket)"
     elif sector == 'aviation':
-        if 'wifi' in top_driver.lower() or 'boarding' in top_driver.lower():
+        if 'wifi' in driver_low or 'boarding' in driver_low:
             rescue_action = "Executive Concierge (Digital Friction Override)"
-        elif 'delay' in top_driver.lower():
+        elif 'delay' in driver_low:
             rescue_action = "Flight Comp (Lounge Access / Upgrade)"
-        elif 'seat' in top_driver.lower() or 'food' in top_driver.lower():
+        elif 'seat' in driver_low or 'food' in driver_low:
             rescue_action = "Amenity Upgrade (Premium Comp)"
     
     return {
         "prediction_id": str(uuid.uuid4()),
-        "probability": float(prob),
+        "probability": round(float(prob), 4),
         "trigger_diagnosis": top_driver,
-        "prescriptive_rescue": rescue_action
+        "prescriptive_rescue": rescue_action,
+        "status": "success"
     }
 
 if __name__ == "__main__":
