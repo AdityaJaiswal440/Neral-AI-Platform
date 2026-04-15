@@ -36,39 +36,40 @@ EXPLAINERS = {}
 PREPROCESSORS = {}
 
 def apply_feature_engineering(df_clean: pd.DataFrame, sector: str):
-    """Replicates the exact feature engineering from the training notebook."""
+    """Replicates training logic using keys from the incoming JSON (underscores)."""
     if sector == 'aviation':
-        # Log Transformations
+        # 1. Log Transformations
         df_clean['distance_log'] = np.log1p(df_clean.get('Flight_Distance', 0))
-        # Handle cases where Arrival_Delay might be missing in payload
-        arrival_delay = df_clean.get('Arrival_Delay_Minutes', 0)
-        departure_delay = df_clean.get('Departure_Delay_Minutes', 0)
-        df_clean['delay_intensity_log'] = np.log1p(departure_delay + arrival_delay)
+        dep_delay = df_clean.get('Departure_Delay_Minutes', 0)
+        arr_delay = df_clean.get('Arrival_Delay_Minutes', 0)
+        df_clean['delay_intensity_log'] = np.log1p(dep_delay + arr_delay)
 
-        # Categorical Encoding
-        df_clean['is_business_travel'] = (df_clean.get('Type_of_Travel') == 'Business travel').astype(int)
-        df_clean['is_disloyal_customer'] = (df_clean.get('Customer_Type') == 'disloyal Customer').astype(int)
+        # 2. Categorical Encoding (Fixed the Boolean .astype error)
+        # We use .eq() to ensure we compare the Series, not a scalar None
+        df_clean['is_business_travel'] = df_clean.get('Type_of_Travel', pd.Series([""])).eq('Business travel').astype(int)
+        df_clean['is_disloyal_customer'] = df_clean.get('Customer_Type', pd.Series([""])).eq('disloyal Customer').astype(int)
 
-        # Score Logic
-        rating_cols = ['Inflight wifi service', 'Online boarding', 'Seat comfort', 'Inflight entertainment']
-        # Fill missing ratings with neutral (3) before calculating mean
+        # 3. Score Logic (Using underscores to match JSON)
+        rating_cols = ['Inflight_wifi_service', 'Online_boarding', 'Seat_comfort', 'Inflight_entertainment']
         for col in rating_cols:
             if col not in df_clean.columns: df_clean[col] = 3
             
         df_clean['csat_score'] = df_clean[rating_cols].mean(axis=1)
         df_clean['loyalty_shock_score'] = df_clean['csat_score'] * df_clean['is_disloyal_customer']
-        df_clean['service_friction_score'] = (5 - df_clean.get('Inflight wifi service', 3)) + (5 - df_clean.get('Online boarding', 3))
         
-        # Fill standard columns to satisfy ColumnTransformer requirements
+        wifi = df_clean.get('Inflight_wifi_service', 3)
+        boarding = df_clean.get('Online_boarding', 3)
+        df_clean['service_friction_score'] = (5 - wifi) + (5 - boarding)
+        
+        # 4. Final consistency check for standard columns
         standard_cols = [
-            'Inflight service', 'Food and drink', 'Baggage handling', 
-            'Checkin service', 'On-board service', 'Cleanliness', 
-            'Gate location', 'Leg room service', 'Ease of Online booking', 
-            'Departure/Arrival time convenient'
+            'Inflight_service', 'Food_and_drink', 'Baggage_handling', 
+            'Checkin_service', 'On_board_service', 'Cleanliness', 
+            'Gate_location', 'Leg_room_service', 'Ease_of_Online_booking', 
+            'Departure/Arrival_time_convenient'
         ]
         for col in standard_cols:
-            if col not in df_clean.columns:
-                df_clean[col] = 3 
+            if col not in df_clean.columns: df_clean[col] = 3
                 
     return df_clean
 
@@ -95,7 +96,7 @@ class PredictPayload(BaseModel):
     features: Dict[str, Any]
 
 def extract_top_driver(sector: str, df_engineered: pd.DataFrame) -> str:
-    """Uses engineered data to generate SHAP explanations."""
+    """Uses the final renamed data to generate SHAP explanations."""
     transformed = PREPROCESSORS[sector].transform(df_engineered)
     all_feat = PREPROCESSORS[sector].get_feature_names_out()
     features_clean = [f.split('__')[1] if '__' in f else f for f in all_feat]
@@ -113,21 +114,21 @@ def predict(payload: PredictPayload, api_key: str = Security(get_api_key)):
     if sector not in MODELS:
         raise HTTPException(status_code=400, detail="Valid sectors: 'ecommerce', 'aviation'")
     
-    # 1. Convert payload to DataFrame
+    # 1. Create DataFrame from raw features (keeps underscores)
     df_raw = pd.DataFrame([payload.features])
     
-    # 2. Map underscores to spaces for Aviation compatibility
-    if sector == 'aviation':
-        df_raw.columns = [c.replace('_', ' ') for c in df_raw.columns]
+    # 2. STEP 1: Feature Engineering (Finds underscores)
+    df_engineered = apply_feature_engineering(df_raw, sector)
     
-    # 3. CRITICAL: Apply Feature Engineering
-    df_ready = apply_feature_engineering(df_raw, sector)
+    # 3. STEP 2: Standardize names for the Model/Transformer (Underscore -> Space)
+    # This ensures "Inflight_wifi_service" becomes "Inflight wifi service"
+    df_engineered.columns = [c.replace('_', ' ') for c in df_engineered.columns]
     
     # 4. Inference
-    prob = MODELS[sector].predict_proba(PREPROCESSORS[sector].transform(df_ready))[0, 1]
+    prob = MODELS[sector].predict_proba(PREPROCESSORS[sector].transform(df_engineered))[0, 1]
     
-    # 5. Interpretability (Using engineered data)
-    top_driver = extract_top_driver(sector, df_ready)
+    # 5. Interpretability
+    top_driver = extract_top_driver(sector, df_engineered)
     
     # 6. Prescriptive Logic
     rescue_action = "Standard Review"
