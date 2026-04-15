@@ -1,3 +1,20 @@
+---
+title: Neral AI Backend
+emoji: 🧠
+colorFrom: indigo
+colorTo: blue
+sdk: docker
+app_port: 8000
+pinned: false
+---
+
+# Neral AI: Hybrid Churn Intelligence Platform
+This is the unified backend engine for the HCIM system. 
+- **Sector Support:** Aviation & E-commerce
+- **Architecture:** FastAPI + XGBoost + SHAP
+- **Status:** Production-Ready (16GB RAM)
+
+
 # ◈ Neral AI - Universal Hybrid Churn Intelligence (UHCI)
 
 **An Open-Source Product from GSV Vadodara**
@@ -45,16 +62,3 @@ cd frontend
 npm install
 npm run dev
 
-
----
-title: Neral AI Backend
-emoji: 📉
-colorFrom: blue
-colorTo: red
-sdk: docker
-app_port: 8000
-pinned: false
----
-
-# Neral AI: Hybrid Churn Intelligence Platform
-This is the unified backend for the HCIM system, managing Aviation and E-commerce churn logic with SHAP interpretability.
