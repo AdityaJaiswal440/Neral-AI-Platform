@@ -227,39 +227,42 @@ def predict(payload: PredictPayload, api_key: str = Security(get_api_key)):
     df_ready = apply_feature_engineering(payload.features, sector)
 
     try:
-        # 1. TRANSFORM & ALIGN
         processed_array = PREPROCESSORS[sector].transform(df_ready)
         
-        # 2. FORCE FEATURE NAME SYNC
-        raw_names = PREPROCESSORS[sector].get_feature_names_out()
-        clean_names = [n.split('__')[-1] for n in raw_names]
-        X_test = pd.DataFrame(processed_array, columns=clean_names)
+        # 1. THE SOURCE OF TRUTH: Get names directly from the Model's brain
+        # This bypasses the Sklearn Version Mismatch/Mapping Ghost
+        feature_names = MODELS[sector].get_booster().feature_names
         
-        # 3. EXECUTE INFERENCE
-        prob = float(MODELS[sector].predict_proba(processed_array)[0, 1])
-        
-        # 4. DIAGNOSIS (THE DRIVER FIX)
+        # 2. ALIGN & EXPLAIN
+        X_inference = pd.DataFrame(processed_array, columns=feature_names)
         explainer = shap.TreeExplainer(MODELS[sector])
-        shap_values = explainer.shap_values(X_test)
         
-        contributions = shap_values[0] if isinstance(shap_values, list) else shap_values[0]
-        drivers = {name: val for name, val in zip(clean_names, contributions) if val > 0}
+        # 3. THE CLASS-1 FIX: Force explanation of the CHURN class (Index 1)
+        # We use .shap_values but specifically target the margin or the 2nd class
+        shap_values = explainer.shap_values(X_inference)
+        
+        if isinstance(shap_values, list):
+            contributions = shap_values[1][0] 
+        else:
+            contributions = shap_values[0]
+
+        # 4. THE TRUE DRIVER MASK
+        drivers = {name: val for name, val in zip(feature_names, contributions) if val > 0}
         
         if drivers:
             top_driver = max(drivers, key=drivers.get)
+            print(f"SYSTEM: CHURN DRIVER DETECTED -> {top_driver}: {drivers[top_driver]}")
         else:
-            top_driver = "Stable behavioral profile"
-
-        print(f"DEBUG: Top 3 Drivers for {sector}: {sorted(drivers.items(), key=lambda x: x[1], reverse=True)[:3]}")
+            top_driver = "STABLE BEHAVIORAL PROFILE"
 
         return {
             "prediction_id":     str(uuid.uuid4()),
-            "probability":       round(prob, 4),
-            "trigger_diagnosis": top_driver.upper(),
+            "probability":       round(float(MODELS[sector].predict_proba(processed_array)[0, 1]), 4),
+            "trigger_diagnosis": top_driver.replace('num__', '').replace('cat__', '').upper(),
             "status":            "success",
         }
     except Exception as e:
-        print(f"CRITICAL ERROR: {str(e)}")
+        print(f"CRITICAL INFERENCE FAILURE: {e}")
         raise HTTPException(status_code=500, detail=f"Inference Failure: {e}")
 
 
