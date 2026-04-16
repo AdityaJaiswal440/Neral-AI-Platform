@@ -28,92 +28,61 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, 
 MODELS, EXPLAINERS, PREPROCESSORS = {}, {}, {}
 
 def apply_feature_engineering(df: pd.DataFrame, sector: str):
-    """Surgical type-locking to prevent ufunc 'isnan' and mixed-type errors."""
+    """Surgical feature replication with total Type Isolation."""
     
-    def get_raw(key):
-        # Universal lookup: check key, underscore-key, space-key, and lowercase
-        return df.get(key, df.get(key.replace(' ', '_'), df.get(key.replace('_', ' '), df.get(key.lower(), None))))
+    # Helper to get raw values regardless of naming convention
+    def get_raw(key, default=None):
+        return df.get(key, df.get(key.replace('_', ' '), df.get(key.replace(' ', '_'), default)))
 
-    def f_num(key, default=0.0):
-        val = get_raw(key)
-        if isinstance(val, pd.Series): val = val.iloc[0] if not val.empty else default
-        try: return float(val) if val is not None else default
-        except: return default
+    # Schema Definitions
+    cat_features = {
+        'aviation': ['Class', 'Customer Type', 'Type of Travel'],
+        'ecommerce': ['customer_segment', 'tenure_group', 'contract_type', 'signup_channel', 'payment_method', 'complaint_type', 'city']
+    }
+    cats = cat_features.get(sector, [])
 
-    def f_str(key, default="unknown"):
-        val = get_raw(key)
-        if isinstance(val, pd.Series): val = val.iloc[0] if not val.empty else default
-        return str(val) if (val is not None and str(val).lower() != 'nan') else default
-
-    # Define Sector-Specific Schemas
+    # 1. Feature Engineering: Aviation
     if sector == 'aviation':
-        cat_cols = ['Class', 'Customer Type', 'Type of Travel']
-        # Feature Engineering
-        df['distance_log'] = np.log1p(f_num('Flight_Distance'))
-        df['delay_intensity_log'] = np.log1p(f_num('Departure_Delay_Minutes') + f_num('Arrival_Delay_Minutes'))
-        df['is_business_travel'] = 1 if f_str('Type of Travel') == 'Business travel' else 0
-        df['is_disloyal_customer'] = 1 if f_str('Customer Type') == 'disloyal Customer' else 0
+        df['distance_log'] = np.log1p(float(pd.to_numeric(get_raw('Flight_Distance'), errors='coerce') or 0))
+        df['delay_intensity_log'] = np.log1p(float(pd.to_numeric(get_raw('Departure_Delay_Minutes'), errors='coerce') or 0) + 
+                                            float(pd.to_numeric(get_raw('Arrival_Delay_Minutes'), errors='coerce') or 0))
+        df['is_business_travel'] = 1 if str(get_raw('Type of Travel')) == 'Business travel' else 0
+        df['is_disloyal_customer'] = 1 if str(get_raw('Customer Type')) == 'disloyal Customer' else 0
         
+        # Ratings
         rating_cols = ['Inflight wifi service', 'Online boarding', 'Seat comfort', 'Inflight entertainment']
-        for col in rating_cols: df[col] = f_num(col, 3.0)
+        for col in rating_cols: df[col] = pd.to_numeric(get_raw(col), errors='coerce') or 3.0
         df['csat_score'] = df[rating_cols].mean(axis=1)
         df['loyalty_shock_score'] = df['csat_score'] * df['is_disloyal_customer']
         df['service_friction_score'] = (5 - df['Inflight wifi service']) + (5 - df['Online boarding'])
-        
-        std_cols = ['Inflight service', 'Food and drink', 'Baggage handling', 'Checkin service', 'On-board service', 
-                    'Cleanliness', 'Gate location', 'Leg room service', 'Ease of Online booking', 'Departure/Arrival time convenient']
-        for col in std_cols: df[col] = f_num(col, 3.0)
-        for col in cat_cols: df[col] = f_str(col)
 
+    # 2. Feature Engineering: E-commerce
     elif sector == 'ecommerce':
-        # List exact categorical columns to avoid mixed-type isnan crash
-        cat_cols = ['customer_segment', 'tenure_group', 'contract_type', 'signup_channel', 'payment_method', 'complaint_type', 'city']
+        df['monthly_fee_log'] = np.log1p(float(pd.to_numeric(get_raw('Monthly_Charges'), errors='coerce') or 30))
+        df['value_score_log'] = np.log1p(float(pd.to_numeric(get_raw('Total_Usage_GB'), errors='coerce') or 100) * float(pd.to_numeric(get_raw('Tenure'), errors='coerce') or 1))
+        df['last_login_days_log'] = np.log1p(float(pd.to_numeric(get_raw('Last_Login_Days'), errors='coerce') or 5))
         
-        # Numeric Engineering
-        df['monthly_fee_log'] = np.log1p(f_num('Monthly_Charges', 30.0))
-        df['value_score_log'] = np.log1p(f_num('Total_Usage_GB', 100.0) * f_num('Tenure', 1.0))
-        df['last_login_days_log'] = np.log1p(f_num('Last_Login_Days', 5.0))
-        df['feature_intensity_log'] = np.log1p(f_num('features_used', 2.0))
-        df['support_intensity_log'] = np.log1p(f_num('support_tickets', 0.0))
-        df['session_strength_log'] = np.log1p(f_num('total_monthly_time', 500.0) / (f_num('monthly_logins', 1.0) + 1.0))
-        
-        # Binary/Calculated
-        df['is_zombie_user'] = 1 if f_num('monthly_logins') < 2 else 0
-        df['is_slow_ghost'] = 1 if f_num('total_monthly_time') < 100 and f_num('Tenure') > 6 else 0
-        df['csat_score'] = f_num('csat', 3.0)
-        df['nps_normalized'] = f_num('nps', 7.0) / 10.0
-        df['loyalty_shock_score'] = (1 - df['nps_normalized']) * (1 / (f_num('Tenure', 1.0) + 1))
-        df['loyalty_resilience'] = f_num('Tenure', 1.0) * df['csat_score']
-        
-        # Map all other required columns
-        for col in ['support_tickets_clipped', 'escalations_clipped', 'payment_failures_clipped', 'referral_count_clipped',
-                    'discount_applied', 'monthly_logins', 'features_used', 'total_monthly_time', 'weekly_active_days', 
-                    'usage_density', 'usage_growth_rate', 'email_open_rate_fixed']:
-            df[col] = f_num(col.replace('_clipped', '').replace('_fixed', ''))
+        df['is_zombie_user'] = 1 if (pd.to_numeric(get_raw('monthly_logins'), errors='coerce') or 1) < 2 else 0
+        df['csat_score'] = float(pd.to_numeric(get_raw('csat'), errors='coerce') or 3)
+        df['nps_normalized'] = (pd.to_numeric(get_raw('nps'), errors='coerce') or 7) / 10.0
+        df['loyalty_shock_score'] = (1 - df['nps_normalized']) * (1 / ((pd.to_numeric(get_raw('Tenure'), errors='coerce') or 1) + 1))
+        df['loyalty_resilience'] = (pd.to_numeric(get_raw('Tenure'), errors='coerce') or 1) * df['csat_score']
 
-        for col in ['is_passive_promoter', 'is_advocate', 'is_recency_danger', 'is_high_friction_payment', 
-                    'is_bouncer', 'is_hidden_dissatisfaction', 'payment_structural_risk']:
-            df[col] = f_num(col, 0)
-
-        for col in cat_cols: df[col] = f_str(col)
-
-    # FINAL TYPE ENFORCEMENT
-    # This prevents Pandas from keeping columns as generic 'object' types
+    # 3. TYPE-LOCKING SHIELD: Final alignment with the Preprocessor's expectations
     required_cols = PREPROCESSORS[sector].feature_names_in_
     for col in required_cols:
         if col not in df.columns:
-            # If the preprocessor expects it, we must provide it
-            df[col] = "unknown" if col in (cat_cols if sector == 'ecommerce' else ['Class', 'Customer Type', 'Type of Travel']) else 0.0
+            # Categorical missing = "unknown", Numerical missing = 0.0
+            df[col] = "unknown" if col in cats else 0.0
         
-        # Explicit Casting
-        if df[col].dtype == object:
-            try:
-                # Try converting to float first; if it fails, it's a string
-                df[col] = pd.to_numeric(df[col])
-            except:
-                df[col] = df[col].astype(str)
+        if col in cats:
+            # Force to string and handle NaN strings
+            df[col] = df[col].astype(str).replace(['nan', 'None', 'NaN', '0.0', '0'], 'unknown')
+        else:
+            # Force to float
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0.0).astype(float)
                 
-    return df[required_cols] # Ensure column order matches exactly what the model saw
+    return df[required_cols]
 
 @app.on_event("startup")
 def load_models():
@@ -146,11 +115,10 @@ def predict(payload: PredictPayload, api_key: str = Security(get_api_key)):
     sector = payload.sector.lower()
     if sector not in MODELS: raise HTTPException(status_code=400, detail="Invalid sector")
     
-    # Process and Cast
     df_raw = pd.DataFrame([payload.features])
     df_ready = apply_feature_engineering(df_raw, sector)
     
-    # Inference
+    # The moment of truth: Transform and Predict
     processed_data = PREPROCESSORS[sector].transform(df_ready)
     prob = MODELS[sector].predict_proba(processed_data)[0, 1]
     top_driver = extract_top_driver(sector, df_ready)
@@ -162,7 +130,3 @@ def predict(payload: PredictPayload, api_key: str = Security(get_api_key)):
         "prescriptive_rescue": "High Engagement Intervention" if prob > 0.5 else "Standard Review",
         "status": "success"
     }
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
