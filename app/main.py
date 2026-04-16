@@ -28,83 +28,94 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, 
 MODELS, EXPLAINERS, PREPROCESSORS = {}, {}, {}
 
 def apply_feature_engineering(df: pd.DataFrame, sector: str):
-    """Surgical feature replication with defensive schema alignment."""
+    """Surgical feature replication with Type-Locking to prevent ufunc 'isnan' errors."""
     
-    def f_val(key, default=0):
-        # Checks for underscore, space, and lowercase variants
-        val = df.get(key, df.get(key.replace('_', ' '), df.get(key.lower(), None)))
+    def get_raw(key, default=None):
+        # Look for the exact key, then underscore, then space, then lowercase
+        return df.get(key, df.get(key.replace(' ', '_'), df.get(key.replace('_', ' '), df.get(key.lower(), default))))
+
+    def f_num(key, default=0.0):
+        val = get_raw(key, default)
         if isinstance(val, pd.Series):
-            return val.iloc[0] if not val.empty else default
-        return val if val is not None else default
+            val = val.iloc[0] if not val.empty else default
+        try:
+            return float(val) if val is not None else default
+        except:
+            return default
+
+    def f_str(key, default="unknown"):
+        val = get_raw(key, default)
+        if isinstance(val, pd.Series):
+            val = val.iloc[0] if not val.empty else default
+        return str(val) if val is not None else default
 
     if sector == 'aviation':
         # Aviation Logic (Verified)
-        df['distance_log'] = np.log1p(float(f_val('Flight_Distance', 0)))
-        df['delay_intensity_log'] = np.log1p(float(f_val('Departure_Delay_Minutes', 0)) + float(f_val('Arrival_Delay_Minutes', 0)))
-        df['is_business_travel'] = 1 if str(f_val('Type_of_Travel')) == 'Business travel' else 0
-        df['is_disloyal_customer'] = 1 if str(f_val('Customer_Type')) == 'disloyal Customer' else 0
+        df['distance_log'] = np.log1p(f_num('Flight_Distance'))
+        df['delay_intensity_log'] = np.log1p(f_num('Departure_Delay_Minutes') + f_num('Arrival_Delay_Minutes'))
+        df['is_business_travel'] = 1 if f_str('Type_of_Travel') == 'Business travel' else 0
+        df['is_disloyal_customer'] = 1 if f_str('Customer_Type') == 'disloyal Customer' else 0
         
-        core_ratings = {'Inflight_wifi_service': 'Inflight wifi service', 'Online_boarding': 'Online boarding', 
-                        'Seat_comfort': 'Seat comfort', 'Inflight_entertainment': 'Inflight entertainment'}
-        for j_key, m_key in core_ratings.items(): df[m_key] = f_val(j_key)
+        core_ratings = ['Inflight wifi service', 'Online boarding', 'Seat comfort', 'Inflight entertainment']
+        for col in core_ratings: df[col] = f_num(col, 3.0)
 
-        df['csat_score'] = df[list(core_ratings.values())].mean(axis=1)
+        df['csat_score'] = df[core_ratings].mean(axis=1)
         df['loyalty_shock_score'] = df['csat_score'] * df['is_disloyal_customer']
         df['service_friction_score'] = (5 - df['Inflight wifi service']) + (5 - df['Online boarding'])
         
-        standard_mapping = {'Inflight_service': 'Inflight service', 'Food_and_drink': 'Food and drink', 
-                            'Baggage_handling': 'Baggage handling', 'Checkin_service': 'Checkin service', 
-                            'On_board_service': 'On-board service', 'Cleanliness': 'Cleanliness', 
-                            'Gate_location': 'Gate location', 'Leg_room_service': 'Leg_room_service', 
-                            'Ease_of_Online_booking': 'Ease of Online booking', 'Departure/Arrival_time_convenient': 'Departure/Arrival time convenient'}
-        for j_key, m_key in standard_mapping.items(): df[m_key] = f_val(j_key)
+        std_cols = ['Inflight service', 'Food and drink', 'Baggage handling', 'Checkin service', 'On-board service', 
+                    'Cleanliness', 'Gate location', 'Leg room service', 'Ease of Online booking', 'Departure/Arrival time convenient']
+        for col in std_cols: df[col] = f_num(col, 3.0)
 
     elif sector == 'ecommerce':
-        # E-commerce Logic (Resolved 37/38 features)
-        df['monthly_fee_log'] = np.log1p(float(f_val('Monthly_Charges', 30)))
-        df['value_score_log'] = np.log1p(float(f_val('Total_Usage_GB', 100)) * float(f_val('Tenure', 1)))
-        df['last_login_days_log'] = np.log1p(float(f_val('Last_Login_Days', 5)))
-        df['feature_intensity_log'] = np.log1p(float(f_val('features_used', 2)))
-        df['support_intensity_log'] = np.log1p(float(f_val('support_tickets', 0)))
-        df['session_strength_log'] = np.log1p(float(f_val('total_monthly_time', 500)) / (float(f_val('monthly_logins', 1)) + 1))
+        # E-commerce 'Type-Locked' Feature Factory
+        # A. Numerical Features (Force to Float)
+        df['monthly_fee_log'] = np.log1p(f_num('Monthly_Charges', 30.0))
+        df['value_score_log'] = np.log1p(f_num('Total_Usage_GB', 100.0) * f_num('Tenure', 1.0))
+        df['last_login_days_log'] = np.log1p(f_num('Last_Login_Days', 5.0))
+        df['feature_intensity_log'] = np.log1p(f_num('features_used', 2.0))
+        df['support_intensity_log'] = np.log1p(f_num('support_tickets', 0.0))
+        df['session_strength_log'] = np.log1p(f_num('total_monthly_time', 500.0) / (f_num('monthly_logins', 1.0) + 1.0))
 
-        df['support_tickets_clipped'] = np.clip(float(f_val('support_tickets', 0)), 0, 10)
-        df['escalations_clipped'] = np.clip(float(f_val('escalations', 0)), 0, 5)
-        df['payment_failures_clipped'] = np.clip(float(f_val('payment_failures', 0)), 0, 3)
-        df['referral_count_clipped'] = np.clip(float(f_val('referral_count', 0)), 0, 20)
+        df['support_tickets_clipped'] = np.clip(f_num('support_tickets'), 0, 10)
+        df['escalations_clipped'] = np.clip(f_num('escalations'), 0, 5)
+        df['payment_failures_clipped'] = np.clip(f_num('payment_failures'), 0, 3)
+        df['referral_count_clipped'] = np.clip(f_num('referral_count'), 0, 20)
 
-        df['is_zombie_user'] = 1 if float(f_val('monthly_logins', 1)) < 2 else 0
-        df['is_slow_ghost'] = 1 if float(f_val('total_monthly_time', 0)) < 100 and float(f_val('Tenure', 0)) > 6 else 0
-        df['is_passive_promoter'] = 1 if float(f_val('nps', 7)) in [7, 8] else 0
-        df['is_advocate'] = 1 if float(f_val('nps', 7)) > 8 else 0
-        df['is_recency_danger'] = 1 if float(f_val('Last_Login_Days', 0)) > 15 else 0
-        df['is_high_friction_payment'] = 1 if str(f_val('payment_method')) == 'Mailed Check' else 0
-        df['is_bouncer'] = 1 if float(f_val('email_open_rate', 0)) < 0.05 else 0
-        df['is_hidden_dissatisfaction'] = 1 if float(f_val('csat', 3)) < 3 and float(f_val('support_tickets', 0)) == 0 else 0
+        # B. Binary Flags (Int)
+        df['is_zombie_user'] = 1 if f_num('monthly_logins') < 2 else 0
+        df['is_slow_ghost'] = 1 if f_num('total_monthly_time') < 100 and f_num('Tenure') > 6 else 0
+        df['is_passive_promoter'] = 1 if f_num('nps', 7) in [7, 8] else 0
+        df['is_advocate'] = 1 if f_num('nps', 7) > 8 else 0
+        df['is_recency_danger'] = 1 if f_num('Last_Login_Days') > 15 else 0
+        df['is_high_friction_payment'] = 1 if f_str('payment_method') == 'Mailed Check' else 0
+        df['is_bouncer'] = 1 if f_num('email_open_rate') < 0.05 else 0
+        df['is_hidden_dissatisfaction'] = 1 if f_num('csat', 3) < 3 and f_num('support_tickets') == 0 else 0
 
-        df['csat_score'] = float(f_val('csat', 3))
-        df['nps_normalized'] = float(f_val('nps', 7)) / 10.0
-        df['loyalty_shock_score'] = (1 - df['nps_normalized']) * (1 / (float(f_val('Tenure', 1)) + 1))
-        df['engagement_efficiency'] = float(f_val('total_monthly_time', 0)) / (float(f_val('features_used', 1)) + 1)
-        df['usage_growth_rate'] = float(f_val('usage_delta', 0)) 
-        df['loyalty_resilience'] = float(f_val('Tenure', 1)) * df['csat_score']
-        df['email_open_rate_fixed'] = float(f_val('email_open_rate', 0.2))
-        df['payment_structural_risk'] = 1 if float(f_val('payment_failures', 0)) > 1 else 0
+        # C. Calculated Scores
+        df['csat_score'] = f_num('csat', 3.0)
+        df['nps_normalized'] = f_num('nps', 7.0) / 10.0
+        df['loyalty_shock_score'] = (1 - df['nps_normalized']) * (1 / (f_num('Tenure', 1.0) + 1))
+        df['engagement_efficiency'] = f_num('total_monthly_time') / (f_num('features_used') + 1)
+        df['usage_growth_rate'] = f_num('usage_delta') 
+        df['loyalty_resilience'] = f_num('Tenure', 1.0) * df['csat_score']
+        df['email_open_rate_fixed'] = f_num('email_open_rate', 0.2)
+        df['payment_structural_risk'] = 1 if f_num('payment_failures') > 1 else 0
 
-        # Categoricals & Raw columns
-        for col in ['customer_segment', 'tenure_group', 'contract_type', 'signup_channel', 'payment_method', 'complaint_type', 'city',
-                    'discount_applied', 'monthly_logins', 'features_used', 'total_monthly_time', 'weekly_active_days', 'usage_density']:
-            df[col] = f_val(col)
-            
-    # DYNAMIC ALIGNMENT: The "Nuclear Option"
-    # Scikit-learn preprocessors know what they want. We ask them.
-    try:
-        required_cols = PREPROCESSORS[sector].feature_names_in_
-        for col in required_cols:
-            if col not in df.columns:
-                df[col] = f_val(col, 0)
-    except Exception as e:
-        print(f"DEBUG: Schema alignment bypass - {str(e)}")
+        # D. Categorical Features (FORCE TO STRING to avoid isnan errors)
+        cat_cols = ['customer_segment', 'tenure_group', 'contract_type', 'signup_channel', 'payment_method', 'complaint_type', 'city']
+        for col in cat_cols: df[col] = f_str(col, "unknown")
+        
+        # E. Remaining Raw Numerical columns
+        raw_num = ['discount_applied', 'monthly_logins', 'features_used', 'total_monthly_time', 'weekly_active_days', 'usage_density']
+        for col in raw_num: df[col] = f_num(col)
+                
+    # DYNAMIC ALIGNMENT (Final Safety Net)
+    required_cols = PREPROCESSORS[sector].feature_names_in_
+    for col in required_cols:
+        if col not in df.columns:
+            # If we don't know the type, default to 0.0 float to be safe with isnan
+            df[col] = 0.0
                 
     return df
 
@@ -139,11 +150,9 @@ def predict(payload: PredictPayload, api_key: str = Security(get_api_key)):
     sector = payload.sector.lower()
     if sector not in MODELS: raise HTTPException(status_code=400, detail="Invalid sector")
     
+    # Process with Type-Locking
     df_raw = pd.DataFrame([payload.features])
     df_ready = apply_feature_engineering(df_raw, sector)
-    
-    # DEBUG HOOK: This prints exactly what the model sees to the logs
-    print(f"DEBUG: Processing {sector}. Columns present: {df_ready.columns.tolist()}")
     
     # Inference
     processed_data = PREPROCESSORS[sector].transform(df_ready)
