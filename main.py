@@ -9,12 +9,13 @@ from typing import Dict, Any, Set
 
 # --- HIJACK & SANITIZATION ---
 _original_isnan = np.core.umath.isnan if hasattr(np, 'core') and hasattr(np.core.umath, 'isnan') else None
-def universal_safe_isnan(x):
+def universal_safe_isnan(x, *args, **kwargs):
     try:
-        if isinstance(x, (float, int, np.floating, np.integer)):
-            return bool(_original_isnan(x)) if _original_isnan else bool(np.isnan(float(x)))
+        if _original_isnan is not None:
+            return _original_isnan(x, *args, **kwargs)
         return False
-    except: return False
+    except TypeError:
+        return np.zeros(x.shape, dtype=bool) if hasattr(x, 'shape') else False
 np.isnan = universal_safe_isnan
 
 def patched_check_unknown(values, known_values, return_mask=False):

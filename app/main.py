@@ -5,16 +5,14 @@ _original_isnan = None
 if hasattr(np, 'core') and hasattr(np.core, 'umath') and hasattr(np.core.umath, 'isnan'):
     _original_isnan = np.core.umath.isnan  # Capture C-level ref before any patch
 
-def universal_safe_isnan(x):
+def universal_safe_isnan(x, *args, **kwargs):
     """String-safe isnan — delegates to the saved C-level function, never recurses."""
     try:
-        if isinstance(x, (float, int, np.floating, np.integer, np.complexfloating)):
-            if _original_isnan is not None:
-                return bool(_original_isnan(x))
-            return bool(np.isnan(float(x)))
+        if _original_isnan is not None:
+            return _original_isnan(x, *args, **kwargs)
         return False
     except (TypeError, ValueError, AttributeError):
-        return False
+        return np.zeros(x.shape, dtype=bool) if hasattr(x, 'shape') else False
 
 # Patch ONLY the public alias — never overwrite np.core.umath.isnan
 np.isnan = universal_safe_isnan
