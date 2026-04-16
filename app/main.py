@@ -1,33 +1,25 @@
-# --- STEP 0: NUMPY IMPORT FIRST, NO PATCH ON np.core.umath ---
+# --- STEP 0: NUMPY IMPORT & SAFE ISNAN PATCH ---
 import numpy as np
-
-# FIX #1: The original patch called np.core.umath.isnan(x) AFTER also replacing
-# np.core.umath.isnan with itself → infinite recursion at scipy import time.
-# Correct approach: save the original C-level function BEFORE any patching,
-# then call ONLY that saved reference inside the wrapper. Never overwrite
-# np.core.umath.isnan — scipy/sklearn call it directly and must hit the C impl.
 
 _original_isnan = None
 if hasattr(np, 'core') and hasattr(np.core, 'umath') and hasattr(np.core.umath, 'isnan'):
-    _original_isnan = np.core.umath.isnan  # save the real C function
+    _original_isnan = np.core.umath.isnan  # Capture C-level ref before any patch
 
 def universal_safe_isnan(x):
-    """String-safe isnan that delegates to the real C-level implementation."""
+    """String-safe isnan — delegates to the saved C-level function, never recurses."""
     try:
         if isinstance(x, (float, int, np.floating, np.integer, np.complexfloating)):
             if _original_isnan is not None:
                 return bool(_original_isnan(x))
-            return bool(np.isnan(float(x)))  # fallback for numpy 2.x where np.core is absent
-        return False  # strings, None, etc. are never NaN
+            return bool(np.isnan(float(x)))
+        return False
     except (TypeError, ValueError, AttributeError):
         return False
 
-# Patch ONLY the public-facing np.isnan — do NOT touch np.core.umath.isnan.
-# scipy and sklearn import the C-level ufunc directly; overwriting it was the
-# cause of the recursion.
+# Patch ONLY the public alias — never overwrite np.core.umath.isnan
 np.isnan = universal_safe_isnan
 
-# --- STEP 1: REMAINING IMPORTS (shap/sklearn now import cleanly) ---
+# --- STEP 1: REMAINING IMPORTS ---
 import os
 import math
 import uuid
@@ -41,11 +33,10 @@ from fastapi.security.api_key import APIKeyHeader
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
-from typing import Dict, Any
+from typing import Dict, Any, Set
 
-# --- STEP 2: SKLEARN ENCODE PATCH (handles unknown categories gracefully) ---
+# --- STEP 2: SKLEARN ENCODE PATCH ---
 def patched_check_unknown(values, known_values, return_mask=False):
-    """Bypass NumPy 2.0 strict-type issues in OrdinalEncoder._check_unknown."""
     known_set = set(known_values)
     mask = np.array([v not in known_set for v in values], dtype=bool)
     if return_mask:
@@ -55,19 +46,39 @@ def patched_check_unknown(values, known_values, return_mask=False):
 
 sklearn.utils._encode._check_unknown = patched_check_unknown
 
-# --- STEP 3: PYDANTIC MODELS (must be defined BEFORE the route that uses them) ---
-# FIX #2: PredictPayload was defined AFTER the /v1/predict route in the original
-# file, causing a NameError at class-body evaluation time.
-
+# --- STEP 3: PYDANTIC MODELS (must be before routes) ---
 class PredictPayload(BaseModel):
     sector: str
     features: Dict[str, Any]
 
-# --- STEP 4: LIFESPAN & MODEL LOADING ---
-MODELS: Dict[str, Any] = {}
-EXPLAINERS: Dict[str, Any] = {}
+# --- STEP 4: GLOBAL STATE ---
+MODELS: Dict[str, Any]        = {}
+EXPLAINERS: Dict[str, Any]    = {}
 PREPROCESSORS: Dict[str, Any] = {}
+# Built dynamically at load time from the actual preprocessor — never hardcoded
+CAT_COLS_BY_SECTOR: Dict[str, Set[str]] = {}
 
+
+def _extract_cat_cols(preprocessor) -> Set[str]:
+    """
+    Derive the exact set of categorical column names from a fitted
+    ColumnTransformer by inspecting which sub-transformers are Encoders.
+    This is the ground truth — no manual CAT_COLS list needed.
+    """
+    cat_cols: Set[str] = set()
+    for name, transformer, cols in preprocessor.transformers_:
+        if name == "remainder":
+            continue
+        t_name = type(transformer).__name__.lower()
+        if "encoder" in t_name:
+            if isinstance(cols, (list, np.ndarray)):
+                cat_cols.update(cols)
+            elif isinstance(cols, str):
+                cat_cols.add(cols)
+    return cat_cols
+
+
+# --- STEP 5: LIFESPAN & MODEL LOADING ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     paths = {
@@ -79,7 +90,7 @@ async def lifespan(app: FastAPI):
             pipe = joblib.load(path)
             pre  = pipe.named_steps['preprocessor']
 
-            # Clean NaN sentinel values left in fitted OrdinalEncoder categories
+            # Clean NaN sentinels baked into fitted OrdinalEncoder categories
             for _, tr, _ in pre.transformers_:
                 if hasattr(tr, 'categories_'):
                     tr.categories_ = [
@@ -91,10 +102,14 @@ async def lifespan(app: FastAPI):
                         for cats in tr.categories_
                     ]
 
-            MODELS[sector]       = pipe.named_steps['classifier']
-            PREPROCESSORS[sector] = pre
-            EXPLAINERS[sector]   = shap.Explainer(MODELS[sector])
+            MODELS[sector]             = pipe.named_steps['classifier']
+            PREPROCESSORS[sector]      = pre
+            EXPLAINERS[sector]         = shap.Explainer(MODELS[sector])
+            CAT_COLS_BY_SECTOR[sector] = _extract_cat_cols(pre)  # ground-truth from model
+
             print(f"SYSTEM: Loaded {sector} model.")
+            print(f"  -> Categorical cols ({len(CAT_COLS_BY_SECTOR[sector])}): "
+                  f"{sorted(CAT_COLS_BY_SECTOR[sector])}")
         else:
             print(f"SYSTEM: Model not found at {path}, skipping.")
 
@@ -103,9 +118,11 @@ async def lifespan(app: FastAPI):
     MODELS.clear()
     EXPLAINERS.clear()
     PREPROCESSORS.clear()
+    CAT_COLS_BY_SECTOR.clear()
 
-# --- STEP 5: APP CORE ---
-app = FastAPI(title="Neral AI Core", version="5.1", lifespan=lifespan)
+
+# --- STEP 6: APP CORE ---
+app = FastAPI(title="Neral AI Core", version="5.2", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -124,90 +141,118 @@ def get_api_key(api_key: str = Security(api_key_header)):
 
 @app.get("/", response_class=HTMLResponse)
 def root():
+    model_info = {s: sorted(CAT_COLS_BY_SECTOR.get(s, [])) for s in MODELS}
     return f"""
     <html>
         <body style="font-family: sans-serif; text-align: center;
                      background: #0e1117; color: white; padding-top: 50px;">
-            <h1 style="color: #ff4b4b;">Neral AI Core v5.1</h1>
+            <h1 style="color: #ff4b4b;">Neral AI Core v5.2</h1>
             <p><strong>NumPy:</strong> {np.__version__}</p>
             <p><strong>Models loaded:</strong> {list(MODELS.keys())}</p>
+            <p><strong>Cat cols per sector:</strong> {model_info}</p>
             <p><strong>Status:</strong> <span style="color:#00ff00;">ONLINE</span></p>
         </body>
     </html>
     """
 
-# --- STEP 6: FEATURE ENGINEERING ---
-CAT_COLS = {
-    'customer_segment', 'tenure_group', 'contract_type', 'signup_channel',
-    'payment_method', 'complaint_type', 'city',
-    'Class', 'Customer Type', 'Type of Travel',
+
+# --- STEP 7: FEATURE ENGINEERING ---
+
+# Coerce common boolean-string representations to numeric 0/1.
+# Handles clients sending "Yes"/"No", "True"/"False" for binary flag columns
+# (e.g. is_advocate, discount_applied) that the model expects as float64.
+_BOOL_MAP: Dict[str, float] = {
+    "yes": 1.0, "no": 0.0,
+    "true": 1.0, "false": 0.0,
+    "y": 1.0, "n": 0.0,
 }
 
+def _to_float(val: Any) -> float:
+    """Safely coerce any value to float for a numeric model feature."""
+    if val is None:
+        return 0.0
+    if isinstance(val, (int, float, np.floating, np.integer)):
+        return float(val)
+    s = str(val).strip().lower()
+    if s in _BOOL_MAP:
+        return _BOOL_MAP[s]         # "Yes" -> 1.0, "No" -> 0.0
+    try:
+        return float(s)
+    except (ValueError, TypeError):
+        return 0.0                   # graceful default, never raises
+
+
 def apply_feature_engineering(payload: dict, sector: str) -> pd.DataFrame:
+    cat_cols = CAT_COLS_BY_SECTOR[sector]  # derived from model, not hardcoded
+
     def get_raw(key):
-        for k in [key, key.replace(' ', '_'), key.lower()]:
+        # Try multiple key variants to be forgiving about naming conventions
+        for k in [key, key.replace(' ', '_'), key.lower(), key.replace('_', ' ')]:
             if k in payload:
                 return payload[k]
         return None
 
-    required  = PREPROCESSORS[sector].feature_names_in_
+    required   = PREPROCESSORS[sector].feature_names_in_
     final_dict: Dict[str, Any] = {}
 
     for col in required:
         val = get_raw(col)
 
-        if col in CAT_COLS:
+        if col in cat_cols:
+            # Categorical branch: always produce a string; unknown for missing/nan
             final_dict[col] = (
                 "unknown"
-                if val is None or str(val).strip().lower() in ('nan', 'none', '')
+                if val is None or str(val).strip().lower() in ("nan", "none", "")
                 else str(val)
             )
         else:
-            try:
-                if col == 'monthly_fee_log':
-                    raw_charge = get_raw('Monthly_Charges')
-                    val = np.log1p(float(raw_charge) if raw_charge is not None else 30.0)
-                final_dict[col] = float(val) if val is not None else 0.0
-            except (TypeError, ValueError):
-                final_dict[col] = 0.0
+            # Numeric branch: derived features first, then safe bool-aware cast
+            if col == "monthly_fee_log":
+                raw_charge = get_raw("Monthly_Charges")
+                val = np.log1p(float(raw_charge) if raw_charge is not None else 30.0)
+                final_dict[col] = float(val)
+            else:
+                final_dict[col] = _to_float(val)   # handles "Yes"/"No" safely
 
     df = pd.DataFrame([final_dict])
     for col in df.columns:
-        if col in CAT_COLS:
-            df[col] = df[col].astype(object)
-        else:
-            df[col] = df[col].astype(np.float64)
+        df[col] = df[col].astype(object) if col in cat_cols else df[col].astype(np.float64)
     return df
 
-# --- STEP 7: PREDICT ENDPOINT ---
+
+# --- STEP 8: PREDICT ENDPOINT ---
 @app.post("/v1/predict")
 def predict(payload: PredictPayload, api_key: str = Security(get_api_key)):
     sector = payload.sector.lower()
     if sector not in MODELS:
-        raise HTTPException(status_code=400, detail=f"Invalid sector '{sector}'. Available: {list(MODELS.keys())}")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid sector '{sector}'. Available: {list(MODELS.keys())}"
+        )
 
     df_ready = apply_feature_engineering(payload.features, sector)
 
     try:
-        processed     = PREPROCESSORS[sector].transform(df_ready)
-        prob          = float(MODELS[sector].predict_proba(processed)[0, 1])
+        processed      = PREPROCESSORS[sector].transform(df_ready)
+        prob           = float(MODELS[sector].predict_proba(processed)[0, 1])
 
-        all_feat      = PREPROCESSORS[sector].get_feature_names_out()
-        features_clean = [f.split('__')[1] if '__' in f else f for f in all_feat]
+        all_feat       = PREPROCESSORS[sector].get_feature_names_out()
+        features_clean = [f.split("__")[1] if "__" in f else f for f in all_feat]
 
         shap_vals  = EXPLAINERS[sector](pd.DataFrame(processed, columns=features_clean))
         top_driver = features_clean[int(np.argmax(np.abs(shap_vals.values[0])))]
 
         return {
-            "prediction_id":    str(uuid.uuid4()),
-            "probability":      round(prob, 4),
+            "prediction_id":     str(uuid.uuid4()),
+            "probability":       round(prob, 4),
             "trigger_diagnosis": top_driver,
-            "status":           "success",
+            "status":            "success",
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Inference Failure: {e}")
 
-# --- STEP 8: LOCAL DEV ENTRYPOINT ---
+
+# --- STEP 9: LOCAL DEV ENTRYPOINT ---
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
