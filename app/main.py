@@ -25,7 +25,7 @@ def get_api_key(api_key: str = Security(api_key_header)):
 MODELS, EXPLAINERS, PREPROCESSORS = {}, {}, {}
 
 def apply_feature_engineering(payload: dict, sector: str):
-    """The Iron Mask: Total isolation using pure Python types."""
+    """The Iron Mask: Rebuilding data with absolute type isolation."""
     
     def get_raw(key, default=None):
         for k in [key, key.replace(' ', '_'), key.replace('_', ' '), key.lower()]:
@@ -34,29 +34,33 @@ def apply_feature_engineering(payload: dict, sector: str):
                 return val if val is not None and str(val).lower() != 'nan' else default
         return default
 
+    # Categorical Map
     cat_cols = {
         'aviation': ['Class', 'Customer Type', 'Type of Travel'],
         'ecommerce': ['customer_segment', 'tenure_group', 'contract_type', 'signup_channel', 'payment_method', 'complaint_type', 'city']
     }.get(sector, [])
 
-    row = {}
+    # Dictionary for engineered values
+    eng = {}
     if sector == 'aviation':
         dist = float(pd.to_numeric(get_raw('Flight_Distance'), errors='coerce') or 0)
         dep_d = float(pd.to_numeric(get_raw('Departure_Delay_Minutes'), errors='coerce') or 0)
         arr_d = float(pd.to_numeric(get_raw('Arrival_Delay_Minutes'), errors='coerce') or 0)
-        row.update({
+        eng.update({
             'distance_log': np.log1p(dist),
             'delay_intensity_log': np.log1p(dep_d + arr_d),
             'is_business_travel': 1.0 if str(get_raw('Type of Travel')) == 'Business travel' else 0.0,
-            'is_disloyal_customer': 1.0 if str(get_raw('Customer Type')) == 'disloyal Customer' else 0.0
+            'is_disloyal_customer': 1.0 if str(get_raw('Customer Type')) == 'disloyal Customer' else 0.0,
+            'csat_score': 3.0 # Default
         })
+        # Add ratings
         for r in ['Inflight wifi service', 'Online boarding', 'Seat comfort', 'Inflight entertainment']:
-            row[r] = float(pd.to_numeric(get_raw(r), errors='coerce') or 3.0)
-        row['csat_score'] = sum(row[r] for r in ['Inflight wifi service', 'Online boarding', 'Seat comfort', 'Inflight entertainment']) / 4.0
-        row['loyalty_shock_score'] = row['csat_score'] * row['is_disloyal_customer']
-        row['service_friction_score'] = (5.0 - row['Inflight wifi service']) + (5.0 - row['Online boarding'])
+            eng[r] = float(pd.to_numeric(get_raw(r), errors='coerce') or 3.0)
+        eng['csat_score'] = sum(eng[r] for r in ['Inflight wifi service', 'Online boarding', 'Seat comfort', 'Inflight entertainment']) / 4.0
+        eng['loyalty_shock_score'] = eng['csat_score'] * eng['is_disloyal_customer']
+        eng['service_friction_score'] = (10.0 - eng['Inflight wifi service'] - eng['Online boarding'])
         for s in ['Inflight service', 'Food and drink', 'Baggage handling', 'Checkin service', 'On-board service', 'Cleanliness', 'Gate location', 'Leg room service', 'Ease of Online booking', 'Departure/Arrival time convenient']:
-            row[s] = float(pd.to_numeric(get_raw(s), errors='coerce') or 3.0)
+            eng[s] = float(pd.to_numeric(get_raw(s), errors='coerce') or 3.0)
 
     elif sector == 'ecommerce':
         m_charges = float(pd.to_numeric(get_raw('Monthly_Charges'), errors='coerce') or 30.0)
@@ -65,8 +69,7 @@ def apply_feature_engineering(payload: dict, sector: str):
         logins = float(pd.to_numeric(get_raw('monthly_logins'), errors='coerce') or 1.0)
         time = float(pd.to_numeric(get_raw('total_monthly_time'), errors='coerce') or 500.0)
         feats = float(pd.to_numeric(get_raw('features_used'), errors='coerce') or 2.0)
-        
-        row.update({
+        eng.update({
             'monthly_fee_log': np.log1p(m_charges),
             'value_score_log': np.log1p(usage * tenure),
             'last_login_days_log': np.log1p(float(pd.to_numeric(get_raw('Last_Login_Days'), errors='coerce') or 5.0)),
@@ -78,12 +81,12 @@ def apply_feature_engineering(payload: dict, sector: str):
             'is_zombie_user': 1.0 if logins < 2.0 else 0.0,
             'engagement_efficiency': time / (feats + 1.0)
         })
-        row['loyalty_shock_score'] = (1.0 - row['nps_normalized']) * (1.0 / (tenure + 1.0))
-        row['loyalty_resilience'] = tenure * row['csat_score']
+        eng['loyalty_shock_score'] = (1.0 - eng['nps_normalized']) * (1.0 / (tenure + 1.0))
+        eng['loyalty_resilience'] = tenure * eng['csat_score']
         for n in ['usage_density', 'discount_applied', 'monthly_logins', 'features_used', 'total_monthly_time', 'weekly_active_days', 'is_passive_promoter', 'is_advocate', 'is_recency_danger', 'is_high_friction_payment', 'is_bouncer', 'is_hidden_dissatisfaction', 'payment_structural_risk', 'support_tickets_clipped', 'escalations_clipped', 'payment_failures_clipped', 'referral_count_clipped', 'usage_growth_rate', 'email_open_rate_fixed']:
-            row[n] = float(pd.to_numeric(get_raw(n.split('_')[0]), errors='coerce') or 0.0)
+            eng[n] = float(pd.to_numeric(get_raw(n.split('_')[0]), errors='coerce') or 0.0)
 
-    # Reconstruct Final Row with absolute type enforcement
+    # Reconstruct Final Row
     required = PREPROCESSORS[sector].feature_names_in_
     final_dict = {}
     for col in required:
@@ -91,13 +94,14 @@ def apply_feature_engineering(payload: dict, sector: str):
             val = get_raw(col, "unknown")
             final_dict[col] = str(val).strip()
         else:
-            val = row.get(col, get_raw(col, 0.0))
+            val = eng.get(col, get_raw(col, 0.0))
             final_dict[col] = float(pd.to_numeric(val, errors='coerce') or 0.0)
 
+    # FINAL TYPE LOCKING
     final_df = pd.DataFrame([final_dict])
     for col in required:
         if col in cat_cols:
-            final_df[col] = final_df[col].astype(object) # Standard object for strings
+            final_df[col] = final_df[col].astype(object) # Forces NumPy string-check bypass
         else:
             final_df[col] = final_df[col].astype(np.float64)
             
@@ -124,6 +128,7 @@ def predict(payload: PredictPayload, api_key: str = Security(get_api_key)):
     sector = payload.sector.lower()
     if sector not in MODELS: raise HTTPException(status_code=400, detail="Invalid Sector")
     
+    # Process
     df_ready = apply_feature_engineering(payload.features, sector)
     
     try:
@@ -143,6 +148,8 @@ def predict(payload: PredictPayload, api_key: str = Security(get_api_key)):
             "status": "success"
         }
     except Exception as e:
+        # Final debugging line if this still fails
+        print(f"TRANSFORM ERROR ON COLUMNS: {df_ready.dtypes}")
         raise HTTPException(status_code=500, detail=f"Inference Error: {str(e)}")
 
 if __name__ == "__main__":
