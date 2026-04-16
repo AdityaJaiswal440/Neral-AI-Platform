@@ -4,6 +4,7 @@ import pandas as pd
 import numpy as np
 import shap
 import uuid
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Security
 from fastapi.security.api_key import APIKeyHeader
 from fastapi.middleware.cors import CORSMiddleware
@@ -11,12 +12,37 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from typing import Dict, Any
 
-# 1. SECURITY & CONFIGURATION
-# Set NERAL_SECRET = NERAL_SECRET_2026 in Hugging Face Secrets
+# 1. SECURITY & GLOBAL REGISTRY
 API_KEY = os.getenv("NERAL_SECRET", "NERAL_SECRET_2026")
 api_key_header = APIKeyHeader(name="x-api-key", auto_error=False)
 
-app = FastAPI(title="Neral AI: Unified Churn Core", version="1.0")
+MODELS, EXPLAINERS, PREPROCESSORS = {}, {}, {}
+
+# 2. LIFESPAN MANAGEMENT (The Modern FastAPI Standard)
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup: Load Models into 16GB Engine
+    paths = {
+        'ecommerce': 'models/hcim_E-comm_Stream_v1.joblib', 
+        'aviation': 'models/hcim_Aviation_v1.joblib'
+    }
+    for sector, path in paths.items():
+        if os.path.exists(path):
+            pipe = joblib.load(path)
+            MODELS[sector] = pipe.named_steps['classifier']
+            PREPROCESSORS[sector] = pipe.named_steps['preprocessor']
+            EXPLAINERS[sector] = shap.Explainer(MODELS[sector])
+            print(f"Loaded {sector} logic...")
+    print("Unified Core Online. 16GB Memory Engine Engaged.")
+    yield
+    # Shutdown logic (if any) goes here
+    MODELS.clear()
+
+app = FastAPI(
+    title="Neral AI: Unified Churn Core", 
+    version="1.1", 
+    lifespan=lifespan
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -25,16 +51,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 2. AUTHENTICATION GATE
+# 3. AUTHENTICATION GATE
 def get_api_key(api_key: str = Security(api_key_header)):
     if api_key == API_KEY:
         return api_key
     raise HTTPException(status_code=403, detail="Forbidden: Check NERAL_SECRET vs x-api-key")
 
-# 3. GLOBAL REGISTRY
-MODELS, EXPLAINERS, PREPROCESSORS = {}, {}, {}
-
-# 4. LANDING PAGE (Silences the 404 logs)
+# 4. LANDING PAGE
 @app.get("/", response_class=HTMLResponse)
 def root():
     return """
@@ -42,7 +65,7 @@ def root():
         <head><title>Neral AI Core</title></head>
         <body style="font-family: sans-serif; text-align: center; padding-top: 50px; background-color: #0e1117; color: white;">
             <h1 style="color: #ff4b4b;">Neral AI: Unified Core Online</h1>
-            <p>16GB Memory Engine Engaged | Timezone: UTC</p>
+            <p>Poison-Proofed Architecture Engaged | Timezone: UTC</p>
             <div style="padding: 20px; border: 1px solid #333; display: inline-block; border-radius: 10px;">
                 <strong>Status:</strong> <span style="color: #00ff00;">Active</span><br>
                 <strong>Endpoints:</strong> <code>/v1/predict</code> (POST)
@@ -51,9 +74,9 @@ def root():
     </html>
     """
 
-# 5. FEATURE ENGINEERING ENGINE
+# 5. POISON-PROOFED FEATURE ENGINEERING
 def apply_feature_engineering(payload: dict, sector: str):
-    """Atomic Type Enforcement: Stripping 'object' metadata to kill isnan errors."""
+    """Senior AI Engineer Fix: Implements StringDtype to bypass NumPy isnan() check."""
     
     def get_raw(key, default=None):
         for k in [key, key.replace(' ', '_'), key.replace('_', ' '), key.lower()]:
@@ -116,35 +139,27 @@ def apply_feature_engineering(payload: dict, sector: str):
     for col in required:
         if col in cat_cols:
             val = get_raw(col, "unknown")
-            final_dict[col] = str(val).strip()
+            cleaned = str(val).strip()
+            final_dict[col] = "unknown" if cleaned.lower() == "nan" else cleaned
         else:
             val = row.get(col, get_raw(col, 0.0))
-            final_dict[col] = float(val)
+            try:
+                final_dict[col] = float(val)
+            except (TypeError, ValueError):
+                final_dict[col] = 0.0
 
     final_df = pd.DataFrame([final_dict])
+
     for col in required:
         if col in cat_cols:
-            # Replaces 'object' with strict 'string' to prevent isnan() crashes
-            final_df[col] = final_df[col].astype(str).replace('nan', 'unknown')
+            # Using StringDtype() to bypass scikit-learn's isnan() numeric check
+            final_df[col] = final_df[col].astype(str).fillna("unknown").astype(pd.StringDtype())
         else:
-            final_df[col] = final_df[col].astype(np.float64)
+            final_df[col] = pd.to_numeric(final_df[col], errors='coerce').fillna(0.0).astype(np.float64)
             
     return final_df
 
-# 6. APP LIFECYCLE
-@app.on_event("startup")
-def load_models():
-    paths = {'ecommerce': 'models/hcim_E-comm_Stream_v1.joblib', 'aviation': 'models/hcim_Aviation_v1.joblib'}
-    for sector, path in paths.items():
-        if os.path.exists(path):
-            pipe = joblib.load(path)
-            MODELS[sector] = pipe.named_steps['classifier']
-            PREPROCESSORS[sector] = pipe.named_steps['preprocessor']
-            EXPLAINERS[sector] = shap.Explainer(MODELS[sector])
-            print(f"Loaded {sector} logic...")
-    print("Unified Core Online. 16GB Memory Engine Engaged.")
-
-# 7. INFERENCE ENDPOINT
+# 6. INFERENCE ENDPOINT
 class PredictPayload(BaseModel):
     sector: str
     features: Dict[str, Any]
@@ -152,7 +167,8 @@ class PredictPayload(BaseModel):
 @app.post("/v1/predict")
 def predict(payload: PredictPayload, api_key: str = Security(get_api_key)):
     sector = payload.sector.lower()
-    if sector not in MODELS: raise HTTPException(status_code=400, detail="Invalid Sector")
+    if sector not in MODELS:
+        raise HTTPException(status_code=400, detail="Invalid Sector")
     
     df_ready = apply_feature_engineering(payload.features, sector)
     
@@ -160,7 +176,7 @@ def predict(payload: PredictPayload, api_key: str = Security(get_api_key)):
         processed = PREPROCESSORS[sector].transform(df_ready)
         prob = MODELS[sector].predict_proba(processed)[0, 1]
         
-        # Diagnosis Logic
+        # Diagnosis
         all_feat = PREPROCESSORS[sector].get_feature_names_out()
         features_clean = [f.split('__')[1] if '__' in f else f for f in all_feat]
         shap_vals = EXPLAINERS[sector](pd.DataFrame(processed, columns=features_clean))
@@ -173,7 +189,7 @@ def predict(payload: PredictPayload, api_key: str = Security(get_api_key)):
             "status": "success"
         }
     except Exception as e:
-        print(f"TRANSFORM ERROR: {str(e)}")
+        print(f"TRANSFORM ERROR ON COLUMNS: {df_ready.dtypes}")
         raise HTTPException(status_code=500, detail=f"Inference Error: {str(e)}")
 
 if __name__ == "__main__":
