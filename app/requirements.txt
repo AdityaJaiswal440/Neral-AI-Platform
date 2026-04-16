@@ -1,11 +1,14 @@
-# BUILD: 2026-04-16-v5-FINAL-HIJACK
+# BUILD: 2026-04-16-v5.1-FIXED
+# FIX #3: numpy was pinned to 1.26.4 in requirements.txt but pip resolved 2.0.2
+# because no transitive dependency constrained it.  Adding an explicit upper
+# bound ensures the resolver never upgrades past 1.x.
 fastapi==0.115.6
 uvicorn[standard]==0.32.1
 pydantic==2.10.4
 joblib==1.4.2
 pandas==2.2.3
-numpy==1.26.4
+numpy>=1.26.4,<2.0.0
 shap==0.46.0
 xgboost==2.1.3
-scikit-learn==1.7.2
+scikit-learn==1.5.2
 python-dotenv==1.0.1
