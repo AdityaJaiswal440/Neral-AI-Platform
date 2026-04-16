@@ -1,3 +1,13 @@
+import os
+import subprocess
+import sys
+
+# Force upgrade before the model even touches memory
+if os.environ.get("UPGRADED") != "TRUE":
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "scikit-learn==1.7.2"])
+    os.environ["UPGRADED"] = "TRUE"
+    os.execv(sys.executable, ['python'] + sys.argv)
+
 # --- STEP 0: NUMPY IMPORT & SAFE ISNAN PATCH ---
 import numpy as np
 

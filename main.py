@@ -1,5 +1,15 @@
+import os
+import subprocess
+import sys
+
+# Force upgrade before the model even touches memory
+if os.environ.get("UPGRADED") != "TRUE":
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "scikit-learn==1.7.2"])
+    os.environ["UPGRADED"] = "TRUE"
+    os.execv(sys.executable, ['python'] + sys.argv)
+
 import numpy as np
-import os, math, uuid, joblib, shap, pandas as pd
+import math, uuid, joblib, shap, pandas as pd
 import sklearn.utils._encode
 from fastapi import FastAPI, HTTPException, Security
 from fastapi.security.api_key import APIKeyHeader
