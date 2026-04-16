@@ -227,44 +227,50 @@ def predict(payload: PredictPayload, api_key: str = Security(get_api_key)):
     df_ready = apply_feature_engineering(payload.features, sector)
 
     try:
+        # 1. GENERATE TRANSFORMED DATA
         processed_array = PREPROCESSORS[sector].transform(df_ready)
         
-        # 1. THE SOURCE OF TRUTH: Get names directly from the Model's brain
-        feature_names = MODELS[sector].get_booster().feature_names
-        if feature_names is None:
-            feature_names = [n.split('__')[-1] for n in PREPROCESSORS[sector].get_feature_names_out()]
-            
-        # 2. ALIGN & EXPLAIN
-        X_inference = pd.DataFrame(processed_array, columns=feature_names)
+        # 2. DYNAMIC NAME EXTRACTION (Version-Resilient)
+        # We pull names directly from the active preprocessor instance
+        raw_cols = PREPROCESSORS[sector].get_feature_names_out()
+        feature_names = [c.split('__')[-1] for c in raw_cols]
+        
+        # 3. CLASS-1 SHAP TARGETING
         explainer = shap.TreeExplainer(MODELS[sector])
+        shap_values = explainer.shap_values(processed_array)
         
-        # 3. THE CLASS-1 FIX: Force explanation of the CHURN class (Index 1)
-        # We use .shap_values but specifically target the margin or the 2nd class
-        shap_values = explainer.shap_values(X_inference)
-        
+        # Handle SHAP output variety (Ensure we grab Class 1 - Churn)
         if isinstance(shap_values, list):
+            # We target the probability of Class 1
             contributions = shap_values[1][0] 
         else:
+            # If it's a single array, index it for the first row
             contributions = shap_values[0]
 
-        # 4. THE TRUE DRIVER MASK
-        drivers = {name: val for name, val in zip(feature_names, contributions) if val > 0}
+        # 4. SYSTEM AUDIT (Check your HF logs for this output!)
+        # This dictionary maps EVERY feature to its raw SHAP value
+        full_audit = dict(zip(feature_names, contributions))
+        print(f"--- NERAL AI SYSTEM AUDIT [{sector.upper()}] ---")
+        for k, v in sorted(full_audit.items(), key=lambda x: x[1], reverse=True)[:5]:
+            print(f"DRIVE SIGNAL: {k} -> {v:.4f}")
+
+        # 5. THE TRUE DRIVER MASK (Ignored negative 'Anchor' values)
+        drivers = {name: val for name, val in full_audit.items() if val > 0}
         
         if drivers:
             top_driver = max(drivers, key=drivers.get)
-            print(f"SYSTEM: CHURN DRIVER DETECTED -> {top_driver}: {drivers[top_driver]}")
         else:
             top_driver = "STABLE BEHAVIORAL PROFILE"
 
         return {
             "prediction_id":     str(uuid.uuid4()),
             "probability":       round(float(MODELS[sector].predict_proba(processed_array)[0, 1]), 4),
-            "trigger_diagnosis": top_driver.replace('num__', '').replace('cat__', '').upper(),
+            "trigger_diagnosis": top_driver.upper().replace('_', ' '),
             "status":            "success",
         }
     except Exception as e:
-        print(f"CRITICAL INFERENCE FAILURE: {e}")
-        raise HTTPException(status_code=500, detail=f"Inference Failure: {e}")
+        print(f"SYSTEM CRITICAL FAILURE: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Inference Failure: {str(e)}")
 
 
 # --- STEP 9: LOCAL DEV ENTRYPOINT ---
