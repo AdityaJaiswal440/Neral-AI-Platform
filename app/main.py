@@ -10,112 +10,122 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Dict, Any
 
-# 1. Configuration & Security
+# 1. Security & App Config
 API_KEY = os.getenv("NERAL_SECRET", "NERAL_SECRET_2026")
 api_key_header = APIKeyHeader(name="x-api-key", auto_error=False)
-
-app = FastAPI(title="Neral AI: Hybrid Churn Intelligence", version="1.0")
-
-# 2. Security Layer
-def get_api_key(api_key: str = Security(api_key_header)):
-    if api_key == API_KEY:
-        return api_key
-    raise HTTPException(status_code=403, detail="Forbidden: Invalid or Missing API Key")
+app = FastAPI(title="Neral AI: Unified Churn Core", version="1.0")
 
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
-# 3. Global Registry
+def get_api_key(api_key: str = Security(api_key_header)):
+    if api_key == API_KEY: return api_key
+    raise HTTPException(status_code=403, detail="Invalid API Key")
+
+# 2. Global Registry
 MODELS, EXPLAINERS, PREPROCESSORS = {}, {}, {}
 
 def apply_feature_engineering(df: pd.DataFrame, sector: str):
-    """Surgical feature replication with total Type Isolation to prevent isnan errors."""
+    """Immutable Feature Factory. Zero mixed-types allowed."""
     
-    def get_raw(key):
-        # Universal lookup: check key, underscore-key, space-key, and lowercase
-        return df.get(key, df.get(key.replace(' ', '_'), df.get(key.replace('_', ' '), df.get(key.lower(), None))))
+    def get_val(key, default=None):
+        # Look for exact, underscore, space, or lowercase variant
+        for k in [key, key.replace(' ', '_'), key.replace('_', ' '), key.lower()]:
+            if k in df.columns:
+                val = df[k].iloc[0]
+                return val if pd.notna(val) else default
+        return default
 
-    def f_num(key, default=0.0):
-        val = get_raw(key)
-        if isinstance(val, pd.Series): val = val.iloc[0] if not val.empty else default
-        try: return float(val) if val is not None else default
-        except: return default
+    # Define Schema Maps
+    cat_map = {
+        'aviation': ['Class', 'Customer Type', 'Type of Travel'],
+        'ecommerce': ['customer_segment', 'tenure_group', 'contract_type', 'signup_channel', 'payment_method', 'complaint_type', 'city']
+    }
+    cats = cat_map.get(sector, [])
 
-    def f_str(key, default="unknown"):
-        val = get_raw(key)
-        if isinstance(val, pd.Series): val = val.iloc[0] if not val.empty else default
-        res = str(val).strip()
-        return res if (res.lower() not in ['nan', 'none', 'null', '0', '0.0']) else default
+    # Create local DF to avoid fragmentation warnings
+    new_data = {}
 
-    # Define Sector-Specific Schemas
     if sector == 'aviation':
-        cat_cols = ['Class', 'Customer Type', 'Type of Travel']
-        # Engineering
-        df['distance_log'] = np.log1p(f_num('Flight_Distance'))
-        df['delay_intensity_log'] = np.log1p(f_num('Departure_Delay_Minutes') + f_num('Arrival_Delay_Minutes'))
-        df['is_business_travel'] = 1 if f_str('Type of Travel') == 'Business travel' else 0
-        df['is_disloyal_customer'] = 1 if f_str('Customer Type') == 'disloyal Customer' else 0
+        dist = float(get_val('Flight_Distance', 0))
+        dep_delay = float(get_val('Departure_Delay_Minutes', 0))
+        arr_delay = float(get_val('Arrival_Delay_Minutes', 0))
         
-        rating_cols = ['Inflight wifi service', 'Online boarding', 'Seat comfort', 'Inflight entertainment']
-        for col in rating_cols: df[col] = f_num(col, 3.0)
-        df['csat_score'] = df[rating_cols].mean(axis=1)
-        df['loyalty_shock_score'] = df['csat_score'] * df['is_disloyal_customer']
-        df['service_friction_score'] = (5 - df['Inflight wifi service']) + (5 - df['Online boarding'])
+        new_data['distance_log'] = np.log1p(dist)
+        new_data['delay_intensity_log'] = np.log1p(dep_delay + arr_delay)
+        new_data['is_business_travel'] = 1 if str(get_val('Type of Travel')) == 'Business travel' else 0
+        new_data['is_disloyal_customer'] = 1 if str(get_val('Customer Type')) == 'disloyal Customer' else 0
         
-        std_cols = ['Inflight service', 'Food and drink', 'Baggage handling', 'Checkin service', 'On-board service', 
-                    'Cleanliness', 'Gate location', 'Leg room service', 'Ease of Online booking', 'Departure/Arrival time convenient']
-        for col in std_cols: df[col] = f_num(col, 3.0)
-        for col in cat_cols: df[col] = f_str(col)
+        ratings = ['Inflight wifi service', 'Online boarding', 'Seat comfort', 'Inflight entertainment']
+        for r in ratings: new_data[r] = float(get_val(r, 3.0))
+        
+        new_data['csat_score'] = sum(new_data[r] for r in ratings) / 4
+        new_data['loyalty_shock_score'] = new_data['csat_score'] * new_data['is_disloyal_customer']
+        new_data['service_friction_score'] = (5 - new_data['Inflight wifi service']) + (5 - new_data['Online boarding'])
+        
+        std = ['Inflight service', 'Food and drink', 'Baggage handling', 'Checkin service', 'On-board service', 
+               'Cleanliness', 'Gate location', 'Leg room service', 'Ease of Online booking', 'Departure/Arrival time convenient']
+        for s in std: new_data[s] = float(get_val(s, 3.0))
+        for c in cats: new_data[c] = str(get_val(c, 'unknown'))
 
     elif sector == 'ecommerce':
-        cat_cols = ['customer_segment', 'tenure_group', 'contract_type', 'signup_channel', 'payment_method', 'complaint_type', 'city']
+        # 38-feature engineering block
+        m_charges = float(get_val('Monthly_Charges', 30.0))
+        tenure = float(get_val('Tenure', 1.0))
+        usage = float(get_val('Total_Usage_GB', 100.0))
+        logins = float(get_val('monthly_logins', 1.0))
+        time = float(get_val('total_monthly_time', 500.0))
+        feats = float(get_val('features_used', 2.0))
         
-        # Numeric Engineering
-        df['monthly_fee_log'] = np.log1p(f_num('Monthly_Charges', 30.0))
-        df['value_score_log'] = np.log1p(f_num('Total_Usage_GB', 100.0) * f_num('Tenure', 1.0))
-        df['last_login_days_log'] = np.log1p(f_num('Last_Login_Days', 5.0))
-        df['feature_intensity_log'] = np.log1p(f_num('features_used', 2.0))
-        df['support_intensity_log'] = np.log1p(f_num('support_tickets', 0.0))
-        df['session_strength_log'] = np.log1p(f_num('total_monthly_time', 500.0) / (f_num('monthly_logins', 1.0) + 1.0))
+        new_data['monthly_fee_log'] = np.log1p(m_charges)
+        new_data['value_score_log'] = np.log1p(usage * tenure)
+        new_data['last_login_days_log'] = np.log1p(float(get_val('Last_Login_Days', 5.0)))
+        new_data['feature_intensity_log'] = np.log1p(feats)
+        new_data['support_intensity_log'] = np.log1p(float(get_val('support_tickets', 0.0)))
+        new_data['session_strength_log'] = np.log1p(time / (logins + 1))
         
-        df['csat_score'] = f_num('csat', 3.0)
-        df['nps_normalized'] = f_num('nps', 7.0) / 10.0
-        df['loyalty_shock_score'] = (1 - df['nps_normalized']) * (1 / (f_num('Tenure', 1.0) + 1))
-        df['loyalty_resilience'] = f_num('Tenure', 1.0) * df['csat_score']
+        new_data['csat_score'] = float(get_val('csat', 3.0))
+        nps = float(get_val('nps', 7.0))
+        new_data['nps_normalized'] = nps / 10.0
+        new_data['loyalty_shock_score'] = (1 - (nps/10.0)) * (1 / (tenure + 1))
+        new_data['loyalty_resilience'] = tenure * new_data['csat_score']
+        new_data['is_zombie_user'] = 1 if logins < 2 else 0
+        new_data['engagement_efficiency'] = time / (feats + 1)
         
-        # Binary & Standard Numerical
-        num_cols = ['support_tickets_clipped', 'escalations_clipped', 'payment_failures_clipped', 'referral_count_clipped',
-                    'discount_applied', 'monthly_logins', 'features_used', 'total_monthly_time', 'weekly_active_days', 
-                    'usage_density', 'usage_growth_rate', 'email_open_rate_fixed', 'is_zombie_user', 'is_slow_ghost', 
-                    'is_passive_promoter', 'is_advocate', 'is_recency_danger', 'is_high_friction_payment', 
-                    'is_bouncer', 'is_hidden_dissatisfaction', 'payment_structural_risk']
-        
-        for col in num_cols:
-            clean_key = col.split('_')[0] if '_' in col else col
-            df[col] = f_num(clean_key)
-        for col in cat_cols: df[col] = f_str(col)
+        # Mapping remaining 20+ features
+        num_cols = ['usage_density', 'discount_applied', 'monthly_logins', 'features_used', 'total_monthly_time', 
+                    'weekly_active_days', 'is_passive_promoter', 'is_advocate', 'is_recency_danger', 
+                    'is_high_friction_payment', 'is_bouncer', 'is_hidden_dissatisfaction', 'payment_structural_risk',
+                    'support_tickets_clipped', 'escalations_clipped', 'payment_failures_clipped', 'referral_count_clipped', 
+                    'usage_growth_rate', 'email_open_rate_fixed']
+        for n in num_cols:
+            clean = n.split('_')[0]
+            new_data[n] = float(get_val(clean, 0.0))
+        for c in cats: new_data[c] = str(get_val(c, 'unknown'))
 
-    # FINAL TYPE ENFORCEMENT SHIELD
-    required_cols = PREPROCESSORS[sector].feature_names_in_
-    for col in required_cols:
-        if col not in df.columns:
-            df[col] = "unknown" if (sector == 'ecommerce' and col in cat_cols) else 0.0
+    # Final Schema Alignment
+    final_df = pd.DataFrame([new_data])
+    required = PREPROCESSORS[sector].feature_names_in_
+    
+    for col in required:
+        if col not in final_df.columns:
+            final_df[col] = "unknown" if col in cats else 0.0
         
-        # Explicitly cast to prevent mixed-type isnan crashes
-        if col in cat_cols or (sector == 'aviation' and col in ['Class', 'Customer Type', 'Type of Travel']):
-            df[col] = df[col].astype(str)
+        # FORCE CASTING - This kills the isnan error
+        if col in cats:
+            final_df[col] = final_df[col].astype(str).replace(['nan', 'None'], 'unknown')
         else:
-            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0.0).astype(float)
-                
-    return df[required_cols]
+            final_df[col] = pd.to_numeric(final_df[col], errors='coerce').fillna(0.0).astype(float)
+            
+    return final_df[required]
 
 @app.on_event("startup")
 def load_models():
-    sectors = {'ecommerce': 'models/hcim_E-comm_Stream_v1.joblib', 'aviation': 'models/hcim_Aviation_v1.joblib'}
-    for sector, path in sectors.items():
+    paths = {'ecommerce': 'models/hcim_E-comm_Stream_v1.joblib', 'aviation': 'models/hcim_Aviation_v1.joblib'}
+    for sector, path in paths.items():
         if os.path.exists(path):
-            pipeline = joblib.load(path)
-            MODELS[sector] = pipeline.named_steps['classifier']
-            PREPROCESSORS[sector] = pipeline.named_steps['preprocessor']
+            pipe = joblib.load(path)
+            MODELS[sector] = pipe.named_steps['classifier']
+            PREPROCESSORS[sector] = pipe.named_steps['preprocessor']
             EXPLAINERS[sector] = shap.Explainer(MODELS[sector])
             print(f"Loaded {sector} logic...")
     print("Unified Core Online. 16GB Memory Engine Engaged.")
@@ -124,26 +134,22 @@ class PredictPayload(BaseModel):
     sector: str
     features: Dict[str, Any]
 
-def extract_top_driver(sector: str, df_final: pd.DataFrame) -> str:
-    transformed = PREPROCESSORS[sector].transform(df_final)
-    all_feat = PREPROCESSORS[sector].get_feature_names_out()
-    features_clean = [f.split('__')[1] if '__' in f else f for f in all_feat]
-    df_shap = pd.DataFrame(transformed, columns=features_clean)
-    shap_vals = EXPLAINERS[sector](df_shap)
-    top_idx = np.argmax(np.abs(shap_vals.values[0]))
-    return features_clean[top_idx]
-
 @app.post("/v1/predict")
-@app.post("/predict")
 def predict(payload: PredictPayload, api_key: str = Security(get_api_key)):
     sector = payload.sector.lower()
-    df_raw = pd.DataFrame([payload.features])
-    df_ready = apply_feature_engineering(df_raw, sector)
+    if sector not in MODELS: raise HTTPException(status_code=400, detail="Invalid Sector")
+    
+    df_ready = apply_feature_engineering(pd.DataFrame([payload.features]), sector)
     
     # Inference
-    processed_data = PREPROCESSORS[sector].transform(df_ready)
-    prob = MODELS[sector].predict_proba(processed_data)[0, 1]
-    top_driver = extract_top_driver(sector, df_ready)
+    processed = PREPROCESSORS[sector].transform(df_ready)
+    prob = MODELS[sector].predict_proba(processed)[0, 1]
+    
+    # Diagnosis (SHAP)
+    all_feat = PREPROCESSORS[sector].get_feature_names_out()
+    features_clean = [f.split('__')[1] if '__' in f else f for f in all_feat]
+    shap_vals = EXPLAINERS[sector](pd.DataFrame(processed, columns=features_clean))
+    top_driver = features_clean[np.argmax(np.abs(shap_vals.values[0]))]
     
     return {
         "prediction_id": str(uuid.uuid4()),
