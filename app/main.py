@@ -230,9 +230,10 @@ def predict(payload: PredictPayload, api_key: str = Security(get_api_key)):
         processed_array = PREPROCESSORS[sector].transform(df_ready)
         
         # 1. THE SOURCE OF TRUTH: Get names directly from the Model's brain
-        # This bypasses the Sklearn Version Mismatch/Mapping Ghost
         feature_names = MODELS[sector].get_booster().feature_names
-        
+        if feature_names is None:
+            feature_names = [n.split('__')[-1] for n in PREPROCESSORS[sector].get_feature_names_out()]
+            
         # 2. ALIGN & EXPLAIN
         X_inference = pd.DataFrame(processed_array, columns=feature_names)
         explainer = shap.TreeExplainer(MODELS[sector])
