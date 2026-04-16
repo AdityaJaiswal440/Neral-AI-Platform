@@ -13,8 +13,8 @@ from typing import Dict, Any
 # 1. Config & Security
 API_KEY = os.getenv("NERAL_SECRET", "NERAL_SECRET_2026")
 api_key_header = APIKeyHeader(name="x-api-key", auto_error=False)
-
 app = FastAPI(title="Neral AI: Absolute Core", version="1.0")
+
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 def get_api_key(api_key: str = Security(api_key_header)):
@@ -25,23 +25,22 @@ def get_api_key(api_key: str = Security(api_key_header)):
 MODELS, EXPLAINERS, PREPROCESSORS = {}, {}, {}
 
 def apply_feature_engineering(payload_dict: dict, sector: str):
-    """Total Type Sovereignty: Sanitizing every bit before it hits the transformer."""
+    """Atomic Type Enforcement: Bypassing Pandas Type-Inference."""
     
     def get_raw(key, default=None):
-        # Universal lookup: check key, underscore, space, and lowercase
         for k in [key, key.replace(' ', '_'), key.replace('_', ' '), key.lower()]:
             if k in payload_dict:
                 val = payload_dict[k]
                 return val if val is not None and str(val).lower() != 'nan' else default
         return default
 
-    # Define categorical vs numerical maps for the preprocessor
+    # Define the Ground Truth Schema
     sector_cats = {
         'aviation': ['Class', 'Customer Type', 'Type of Travel'],
         'ecommerce': ['customer_segment', 'tenure_group', 'contract_type', 'signup_channel', 'payment_method', 'complaint_type', 'city']
     }.get(sector, [])
 
-    # The interim dictionary to hold calculated values
+    # Dictionary to hold pure Python scalars
     row = {}
 
     if sector == 'aviation':
@@ -86,34 +85,38 @@ def apply_feature_engineering(payload_dict: dict, sector: str):
         row['loyalty_shock_score'] = (1.0 - row['nps_normalized']) * (1.0 / (tenure + 1.0))
         row['loyalty_resilience'] = tenure * row['csat_score']
 
-        num_list = ['usage_density', 'discount_applied', 'monthly_logins', 'features_used', 'total_monthly_time', 
-                    'weekly_active_days', 'is_passive_promoter', 'is_advocate', 'is_recency_danger', 
-                    'is_high_friction_payment', 'is_bouncer', 'is_hidden_dissatisfaction', 'payment_structural_risk',
-                    'support_tickets_clipped', 'escalations_clipped', 'payment_failures_clipped', 'referral_count_clipped', 
-                    'usage_growth_rate', 'email_open_rate_fixed']
-        for n in num_list: row[n] = float(get_raw(n.split('_')[0], 0.0))
+        for n in ['usage_density', 'discount_applied', 'monthly_logins', 'features_used', 'total_monthly_time', 
+                  'weekly_active_days', 'is_passive_promoter', 'is_advocate', 'is_recency_danger', 
+                  'is_high_friction_payment', 'is_bouncer', 'is_hidden_dissatisfaction', 'payment_structural_risk',
+                  'support_tickets_clipped', 'escalations_clipped', 'payment_failures_clipped', 'referral_count_clipped', 
+                  'usage_growth_rate', 'email_open_rate_fixed']:
+            clean = n.split('_')[0]
+            row[n] = float(get_raw(clean, 0.0))
 
-    # Construct Final Dictionary aligned to Feature Names
+    # FINAL BARRIER: Alignment with the Model's trained feature list
     required = PREPROCESSORS[sector].feature_names_in_
-    final_dict = {}
+    final_df = pd.DataFrame(columns=required)
+    
+    # We populate the row with explicit type casting
+    temp_row = {}
     for col in required:
         if col in sector_cats:
-            final_dict[col] = str(get_raw(col, "unknown")).strip()
+            val = get_raw(col, "unknown")
+            temp_row[col] = str(val).strip()
         else:
             val = row.get(col, get_raw(col, 0.0))
-            final_dict[col] = float(pd.to_numeric(val, errors='coerce') or 0.0)
+            temp_row[col] = float(pd.to_numeric(val, errors='coerce') or 0.0)
 
-    # FINAL BARRIER: Create DF with explicit NumPy types
-    # categorical as object, numerical as float64
-    final_df = pd.DataFrame([final_dict])
-    
-    # We must explicitly separate the dtypes to prevent scikit-learn from guessing
+    # Convert to DataFrame
+    final_df = pd.DataFrame([temp_row])
+
+    # TYPE HARDENING: This forces the underlying NumPy storage to be unambiguous
     for col in required:
         if col in sector_cats:
-            # Force the internal representation to a pure string object
-            final_df[col] = final_df[col].astype(str).replace('nan', 'unknown')
+            # Cast to the new Pandas 'string' dtype which scikit-learn 1.7+ handles safely
+            final_df[col] = final_df[col].astype('string').fillna('unknown')
         else:
-            final_df[col] = final_df[col].astype(np.float64)
+            final_df[col] = final_df[col].astype(np.float64).fillna(0.0)
             
     return final_df
 
@@ -139,12 +142,13 @@ def predict(payload: PredictPayload, api_key: str = Security(get_api_key)):
     sector = payload.sector.lower()
     if sector not in MODELS: raise HTTPException(status_code=400, detail="Invalid Sector")
     
-    # 1. Engineering Barrier
+    # 1. Total Type-Locked Engineering
     df_ready = apply_feature_engineering(payload.features, sector)
     
     # 2. Inference & Diagnosis
     try:
-        # Final safety check: if we pass a numpy array directly, sklearn often avoids the isnan check on strings
+        # We pass the underlying NumPy array for the numerical part if needed, 
+        # but modern sklearn transform(df) is usually safest IF types are locked.
         processed = PREPROCESSORS[sector].transform(df_ready)
         prob = MODELS[sector].predict_proba(processed)[0, 1]
         
@@ -162,7 +166,8 @@ def predict(payload: PredictPayload, api_key: str = Security(get_api_key)):
         }
     except Exception as e:
         print(f"CRITICAL TRANSFORM ERROR: {str(e)}")
-        # Provide the exact reason to the user to avoid guessing
+        # If this STILL fails, it means one of your categories in the payload is 
+        # a type NumPy cannot handle (like a dictionary or list)
         raise HTTPException(status_code=500, detail=f"Inference Error: {str(e)}")
 
 if __name__ == "__main__":
