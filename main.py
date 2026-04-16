@@ -46,6 +46,12 @@ async def lifespan(app: FastAPI):
         if os.path.exists(p):
             pipe = joblib.load(p)
             pre = pipe.named_steps['preprocessor']
+            
+            # FORCE RE-INITIALIZATION OF CATEGORIES
+            for _, tr, _ in pre.transformers_:
+                if hasattr(tr, 'handle_unknown'):
+                    tr.handle_unknown = 'ignore' # Ensure it doesn't crash, but we need the categories!
+            
             # Scrub serialized NaNs
             for _, tr, _ in pre.transformers_:
                 if hasattr(tr, 'categories_'):
