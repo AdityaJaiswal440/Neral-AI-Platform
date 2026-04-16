@@ -27,7 +27,7 @@ def patched_check_unknown(values, known_values, return_mask=False):
 sklearn.utils._encode._check_unknown = patched_check_unknown
 
 # --- ENGINE STATE ---
-MODELS, EXPLAINERS, PREPROCESSORS = {}, {}, {}
+MODELS, PREPROCESSORS = {}, {}
 CAT_COLS_BY_SECTOR: Dict[str, Set[str]] = {}
 
 def _extract_cat_cols(preprocessor) -> Set[str]:
@@ -53,12 +53,6 @@ async def lifespan(app: FastAPI):
             MODELS[s], PREPROCESSORS[s] = pipe.named_steps['classifier'], pre
             CAT_COLS_BY_SECTOR[s] = _extract_cat_cols(pre)
             
-            # Baseline Normalization for SHAP
-            all_feat = pre.get_feature_names_out()
-            features_clean = [f.split("__")[1] if "__" in f else f for f in all_feat]
-            neutral_background = pd.DataFrame(np.zeros((10, len(features_clean))), columns=features_clean)
-            
-            EXPLAINERS[s] = shap.Explainer(MODELS[s], neutral_background)
             print(f"SYSTEM: {s.upper()} Core Online.")
     yield
 
@@ -115,24 +109,39 @@ async def predict(payload: dict, api_key: str = Security(auth_header)):
     df_ready = apply_feature_engineering(feat_raw, sector)
 
     try:
-        processed = PREPROCESSORS[sector].transform(df_ready)
-        prob = float(MODELS[sector].predict_proba(processed)[0, 1])
+        # 1. TRANSFORM & ALIGN
+        processed_array = PREPROCESSORS[sector].transform(df_ready)
         
-        # 2. SHAP DIAGNOSIS (THE FIX)
-        cols = PREPROCESSORS[sector].get_feature_names_out()
-        cols_clean = [c.split('__')[-1] if '__' in c else c for c in cols]
-        shap_vals = EXPLAINERS[sector](pd.DataFrame(processed, columns=cols_clean))
+        # 2. FORCE FEATURE NAME SYNC
+        raw_names = PREPROCESSORS[sector].get_feature_names_out()
+        clean_names = [n.split('__')[-1] for n in raw_names]
+        X_test = pd.DataFrame(processed_array, columns=clean_names)
         
-        contributions = shap_vals.values[0]
-        # Identify drivers (values > 0)
-        if np.max(contributions) > 0:
-            driver_idx = int(np.argmax(contributions)) # Index of the biggest PUSH toward churn
-            top_driver = cols_clean[driver_idx]
+        # 3. EXECUTE INFERENCE
+        prob = float(MODELS[sector].predict_proba(processed_array)[0, 1])
+        
+        # 4. DIAGNOSIS (THE DRIVER FIX)
+        explainer = shap.TreeExplainer(MODELS[sector])
+        shap_values = explainer.shap_values(X_test)
+        
+        contributions = shap_values[0] if isinstance(shap_values, list) else shap_values[0]
+        drivers = {name: val for name, val in zip(clean_names, contributions) if val > 0}
+        
+        if drivers:
+            top_driver = max(drivers, key=drivers.get)
         else:
             top_driver = "Stable behavioral profile"
 
-        return {"prediction_id": str(uuid.uuid4()), "probability": round(prob, 4), "trigger_diagnosis": top_driver, "status": "success"}
+        print(f"DEBUG: Top 3 Drivers for {sector}: {sorted(drivers.items(), key=lambda x: x[1], reverse=True)[:3]}")
+
+        return {
+            "prediction_id": str(uuid.uuid4()),
+            "probability": round(prob, 4),
+            "trigger_diagnosis": top_driver.upper(),
+            "status": "success"
+        }
     except Exception as e:
+        print(f"CRITICAL ERROR: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":

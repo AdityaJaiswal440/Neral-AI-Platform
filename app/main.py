@@ -51,7 +51,6 @@ class PredictPayload(BaseModel):
 
 # --- STEP 4: GLOBAL STATE ---
 MODELS: Dict[str, Any]        = {}
-EXPLAINERS: Dict[str, Any]    = {}
 PREPROCESSORS: Dict[str, Any] = {}
 # Built dynamically at load time from the actual preprocessor — never hardcoded
 CAT_COLS_BY_SECTOR: Dict[str, Set[str]] = {}
@@ -102,15 +101,7 @@ async def lifespan(app: FastAPI):
 
             MODELS[sector]             = pipe.named_steps['classifier']
             PREPROCESSORS[sector]      = pre
-            
-            # Baseline Normalization for SHAP
-            all_feat = pre.get_feature_names_out()
-            features_clean = [f.split("__")[1] if "__" in f else f for f in all_feat]
-            neutral_background = pd.DataFrame(np.zeros((10, len(features_clean))), columns=features_clean)
-            EXPLAINERS[sector]         = shap.Explainer(MODELS[sector], neutral_background)
-            
-            CAT_COLS_BY_SECTOR[sector] = _extract_cat_cols(pre)  # ground-truth from model
-
+            CAT_COLS_BY_SECTOR[sector] = _extract_cat_cols(pre)
             print(f"SYSTEM: Loaded {sector} model.")
             print(f"  -> Categorical cols ({len(CAT_COLS_BY_SECTOR[sector])}): "
                   f"{sorted(CAT_COLS_BY_SECTOR[sector])}")
@@ -120,7 +111,6 @@ async def lifespan(app: FastAPI):
     print("SYSTEM: Neral AI Core online.")
     yield
     MODELS.clear()
-    EXPLAINERS.clear()
     PREPROCESSORS.clear()
     CAT_COLS_BY_SECTOR.clear()
 
@@ -237,31 +227,39 @@ def predict(payload: PredictPayload, api_key: str = Security(get_api_key)):
     df_ready = apply_feature_engineering(payload.features, sector)
 
     try:
-        processed      = PREPROCESSORS[sector].transform(df_ready)
-        prob           = float(MODELS[sector].predict_proba(processed)[0, 1])
-
-        all_feat       = PREPROCESSORS[sector].get_feature_names_out()
-        features_clean = [f.split("__")[1] if "__" in f else f for f in all_feat]
-
-        shap_vals  = EXPLAINERS[sector](pd.DataFrame(processed, columns=features_clean))
+        # 1. TRANSFORM & ALIGN
+        processed_array = PREPROCESSORS[sector].transform(df_ready)
         
-        # FIND THE TRUE DRIVER (Highest POSITIVE contribution to Churn)
-        shap_contributions = shap_vals.values[0]
-        if np.max(shap_contributions) > 0:
-            # Get the index of the highest positive value only
-            driver_idx = int(np.argmax(shap_contributions))
-            top_driver = features_clean[driver_idx]
+        # 2. FORCE FEATURE NAME SYNC
+        raw_names = PREPROCESSORS[sector].get_feature_names_out()
+        clean_names = [n.split('__')[-1] for n in raw_names]
+        X_test = pd.DataFrame(processed_array, columns=clean_names)
+        
+        # 3. EXECUTE INFERENCE
+        prob = float(MODELS[sector].predict_proba(processed_array)[0, 1])
+        
+        # 4. DIAGNOSIS (THE DRIVER FIX)
+        explainer = shap.TreeExplainer(MODELS[sector])
+        shap_values = explainer.shap_values(X_test)
+        
+        contributions = shap_values[0] if isinstance(shap_values, list) else shap_values[0]
+        drivers = {name: val for name, val in zip(clean_names, contributions) if val > 0}
+        
+        if drivers:
+            top_driver = max(drivers, key=drivers.get)
         else:
-            # If no feature is pushing for churn, identify the least helpful one
-            top_driver = "Neutral / Stable Profile"
+            top_driver = "Stable behavioral profile"
+
+        print(f"DEBUG: Top 3 Drivers for {sector}: {sorted(drivers.items(), key=lambda x: x[1], reverse=True)[:3]}")
 
         return {
             "prediction_id":     str(uuid.uuid4()),
             "probability":       round(prob, 4),
-            "trigger_diagnosis": top_driver,
+            "trigger_diagnosis": top_driver.upper(),
             "status":            "success",
         }
     except Exception as e:
+        print(f"CRITICAL ERROR: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Inference Failure: {e}")
 
 
