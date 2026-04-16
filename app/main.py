@@ -13,33 +13,35 @@ from typing import Dict, Any
 # 1. Config & Security
 API_KEY = os.getenv("NERAL_SECRET", "NERAL_SECRET_2026")
 api_key_header = APIKeyHeader(name="x-api-key", auto_error=False)
-app = FastAPI(title="Neral AI: Absolute Core", version="1.0")
 
+app = FastAPI(title="Neral AI: Absolute Core", version="1.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 def get_api_key(api_key: str = Security(api_key_header)):
     if api_key == API_KEY: return api_key
     raise HTTPException(status_code=403, detail="Forbidden: Check NERAL_SECRET vs x-api-key")
 
-# 2. Global Registry
+# 2. Global Model Registry
 MODELS, EXPLAINERS, PREPROCESSORS = {}, {}, {}
 
 def apply_feature_engineering(payload_dict: dict, sector: str):
-    """Rebuilds data with surgical type precision."""
+    """Total Type Sovereignty: Sanitizing every bit before it hits the transformer."""
     
     def get_raw(key, default=None):
+        # Universal lookup: check key, underscore, space, and lowercase
         for k in [key, key.replace(' ', '_'), key.replace('_', ' '), key.lower()]:
             if k in payload_dict:
                 val = payload_dict[k]
                 return val if val is not None and str(val).lower() != 'nan' else default
         return default
 
-    # Define strict categorical sets
-    CAT_COLS = {
+    # Define categorical vs numerical maps for the preprocessor
+    sector_cats = {
         'aviation': ['Class', 'Customer Type', 'Type of Travel'],
         'ecommerce': ['customer_segment', 'tenure_group', 'contract_type', 'signup_channel', 'payment_method', 'complaint_type', 'city']
     }.get(sector, [])
 
+    # The interim dictionary to hold calculated values
     row = {}
 
     if sector == 'aviation':
@@ -91,23 +93,27 @@ def apply_feature_engineering(payload_dict: dict, sector: str):
                     'usage_growth_rate', 'email_open_rate_fixed']
         for n in num_list: row[n] = float(get_raw(n.split('_')[0], 0.0))
 
-    # Construct and Sanitize DataFrame
+    # Construct Final Dictionary aligned to Feature Names
     required = PREPROCESSORS[sector].feature_names_in_
     final_dict = {}
     for col in required:
-        if col in CAT_COLS:
+        if col in sector_cats:
             final_dict[col] = str(get_raw(col, "unknown")).strip()
         else:
             val = row.get(col, get_raw(col, 0.0))
             final_dict[col] = float(pd.to_numeric(val, errors='coerce') or 0.0)
 
-    # FINAL TYPE LOCKING: This forces Pandas out of the generic 'object' dtype
+    # FINAL BARRIER: Create DF with explicit NumPy types
+    # categorical as object, numerical as float64
     final_df = pd.DataFrame([final_dict])
+    
+    # We must explicitly separate the dtypes to prevent scikit-learn from guessing
     for col in required:
-        if col in CAT_COLS:
-            final_df[col] = final_df[col].astype(str) # Force Unicode string
+        if col in sector_cats:
+            # Force the internal representation to a pure string object
+            final_df[col] = final_df[col].astype(str).replace('nan', 'unknown')
         else:
-            final_df[col] = final_df[col].astype(np.float64) # Force standard float
+            final_df[col] = final_df[col].astype(np.float64)
             
     return final_df
 
@@ -133,14 +139,12 @@ def predict(payload: PredictPayload, api_key: str = Security(get_api_key)):
     sector = payload.sector.lower()
     if sector not in MODELS: raise HTTPException(status_code=400, detail="Invalid Sector")
     
-    # 1. Engineering with Strict Casting
+    # 1. Engineering Barrier
     df_ready = apply_feature_engineering(payload.features, sector)
     
-    # 2. Inference & Explainability
+    # 2. Inference & Diagnosis
     try:
-        # Pre-transform check: Ensure no NaN values exist in df_ready
-        df_ready = df_ready.fillna("unknown" if sector == 'ecommerce' else 0.0)
-        
+        # Final safety check: if we pass a numpy array directly, sklearn often avoids the isnan check on strings
         processed = PREPROCESSORS[sector].transform(df_ready)
         prob = MODELS[sector].predict_proba(processed)[0, 1]
         
@@ -158,7 +162,7 @@ def predict(payload: PredictPayload, api_key: str = Security(get_api_key)):
         }
     except Exception as e:
         print(f"CRITICAL TRANSFORM ERROR: {str(e)}")
-        # If still failing, provide the exact column triggering the issue
+        # Provide the exact reason to the user to avoid guessing
         raise HTTPException(status_code=500, detail=f"Inference Error: {str(e)}")
 
 if __name__ == "__main__":
