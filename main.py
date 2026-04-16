@@ -80,10 +80,20 @@ def _to_float(val: Any) -> float:
 
 def apply_feature_engineering(payload: dict, sector: str) -> pd.DataFrame:
     cat_cols = CAT_COLS_BY_SECTOR[sector]
+    # Case-insensitive payload mapping to prevent capitalization key drops
+    payload_lower = {str(k).lower(): v for k, v in payload.items()}
+
     def get_raw(key):
-        for k in [key, key.replace(' ', '_'), key.lower(), key.replace('_', ' ')]:
-            if k in payload: return payload[k]
+        target_variations = [
+            str(key).lower(),
+            str(key).lower().replace(' ', '_'),
+            str(key).lower().replace('_', ' ')
+        ]
+        for k in target_variations:
+            if k in payload_lower:
+                return payload_lower[k]
         return None
+        
     required = PREPROCESSORS[sector].feature_names_in_
     final_dict = {}
     for col in required:
