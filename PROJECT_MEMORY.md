@@ -1,51 +1,57 @@
-# Hybrid Churn Intelligence Model (HCIM)
-## [SOURCE OF TRUTH - PHASE 2: MODELING IGNITION]
+Neral AI: Unified Churn Intelligence
+[SOURCE OF TRUTH - PHASE 3: DEPLOYMENT & DASHBOARD]
+1. Project Scope & Hardened Assets
+Sectors: E-commerce (HCIM-E) and Aviation (HCIM-A).
 
----
+Models: Cost-Sensitive XGBoost (SPW: 8.79 for E-comm) utilizing a Behavioral Foundry approach.
 
-## 1. Project Scope & Datasets
-- **Sectors:** E-commerce, Streaming, and Aviation.
-- **Primary Data Assets:**
-    1. `customer_churn_business_dataset.csv` (E-comm + Streaming)
-    2. `Hybrid_Aviation_Churn_Integrated.csv` (Aviation - Authentic Survey Data)
-- **Objective:** Cross-sector churn prediction using a unified Behavioral Foundry and Cost-Sensitive XGBoost logic.
+Infrastructure: Hugging Face Spaces (16GB RAM Engine).
 
----
+Status: Backend Operational. The "Unified Core" is live and serving RESTful inference requests.
 
-## 2. The Behavioral Foundry (Core Signals)
-Agnostic signals forged to bridge the "Friction-Loyalty Nexus":
-- **Economic Intensity:** `monthly_fee_log`, `value_score_log`.
-- **Friction Vectors:** `support_intensity_log` (E-comm), `service_friction_score` (Aviation).
-- **Loyalty Anchors:** `loyalty_shock_score` (All), `loyalty_resilience` (Aviation).
-- **Engagement Density:** `usage_density` (Streaming), `engagement_efficiency` (Aviation).
+2. The Hardened Architecture (The "Nuclear" Shield)
+To survive the transition from training to production, the system was hardened against three critical failure points:
 
----
+Dependency Shield: Enforced strict versioning (numpy>=1.26.4,<2.0.0) to prevent binary-level isnan ufunc crashes.
 
-## 3. Current Project Stage: [PHASE 2 - MODELING]
+Surgical Memory Patching: Implementation of a startup routine that "scrubs" serialized .joblib files to remove NaN sentinels baked in during the training phase.
 
-### ✅ PHASE 1: DATA PREPARATION (COMPLETED)
-- **Aviation:** Reconstructed using authentic logs; demographics (Age/Gender) purged.
-- **E-comm/Streaming:** Synthesized behavioral features integrated; 9:1 imbalance confirmed.
+Type-Safe Engineering: Deployment of a safe_float utility to reconcile categorical "Yes/No" inputs into the numeric format required by XGBoost.
 
-### 🏗️ PHASE 2: MODELING (ACTIVE)
-- **Task 1 (Aviation):** Ready for balanced baseline training (Standard weighting).
-- **Task 2 (E-comm/Streaming):** - **Stratified 80/20 Split:** COMPLETED (Maintains ~10.2% churn ratio).
-    - **SPW Calculation:** COMPLETED (Dynamic `scale_pos_weight` = 8.79).
-- **Current Task:** Execute `model.fit()` and optimize for **Recall** using `eval_metric='aucpr'`.
+3. Current Project Stage: [PHASE 3 - FRONTEND INTEGRATION]
+✅ PHASE 1: DATA PREPARATION (COMPLETED)
+Behavioral signals forged; demographics purged.
 
----
+✅ PHASE 2: MODELING & BACKEND DEPLOYMENT (COMPLETED)
+Model Fit: High-Recall training via aucpr optimization.
 
-## 4. Active Workspace Handshake (Antigravity Context)
-- **Target:** `churn` (Binary 0/1).
-- **Engine:** XGBoost (Extreme Gradient Boosting).
-- **Model Parameters:** - `scale_pos_weight`: 8.79 (For E-comm) / 1.0 (For Aviation).
-    - `eval_metric`: 'aucpr' (Focus on Precision-Recall Curve).
-- **Validation:** SHAP Summary Plots are MANDATORY for transparency.
+FastAPI Implementation: Lifespan-managed REST API with secure x-api-key headers.
 
----
+Hugging Face Migration: Successfully moved from Render to a 16GB Dedicated Space.
 
-## 5. HCIM Executive Instructions (Persona: Data Architect)
-- **Recall-First Mandate:** In an imbalanced 9:1 world, Accuracy is a "Liar." We prioritize catching the churner over global accuracy.
-- **No Demographics:** Never suggest modeling based on Age, Gender, or Location. Focus exclusively on **Behavior and Friction**.
-- **Mathematical Integrity:** Always use Stratified splits to prevent sampling bias.
-- **Explainability:** No training is final until SHAP identifies the "Why" behind the "Who."
+Live Verification: Successful inference confirmed (e.g., Probability: 0.5743; Trigger: csat_score).
+
+🏗️ PHASE 3: STREAMLIT DASHBOARD (ACTIVE)
+Task 1: Initialize frontend/app.py on a secondary Hugging Face Space.
+
+Task 2: Connect UI widgets (sliders/dropdowns) to the /v1/predict endpoint.
+
+Task 3: Render real-time SHAP force plots for local explainability.
+
+4. Active Workspace Handshake (Production Context)
+Backend URL: https://adityajaiswal440-neral-ai-backend.hf.space/
+
+API Endpoint: /v1/predict
+
+Diagnostics: SHAP Engine Verified. The system successfully identifies the "Top Driver" for every prediction.
+
+Security: NERAL_SECRET_2026 gate active.
+
+5. HCIM Executive Instructions (Persona: Data Architect)
+Decoupled Architecture: Maintain strict separation between the "Brain" (FastAPI Backend) and the "Face" (Streamlit Frontend).
+
+Friction-First UI: The dashboard must emphasize behavioral inputs over static traits.
+
+Explainability Mandate: Every prediction displayed on the dashboard must be accompanied by its SHAP diagnosis. A prediction without a "Why" is a failure.
+
+Zero-Downtime Mentality: Any updates to the feature engineering must be tested against the "Nuclear Patch" to prevent regression of the NumPy 2.0 crash.

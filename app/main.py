@@ -104,7 +104,13 @@ async def lifespan(app: FastAPI):
 
             MODELS[sector]             = pipe.named_steps['classifier']
             PREPROCESSORS[sector]      = pre
-            EXPLAINERS[sector]         = shap.Explainer(MODELS[sector])
+            
+            # Baseline Normalization for SHAP
+            all_feat = pre.get_feature_names_out()
+            features_clean = [f.split("__")[1] if "__" in f else f for f in all_feat]
+            neutral_background = pd.DataFrame(np.zeros((10, len(features_clean))), columns=features_clean)
+            EXPLAINERS[sector]         = shap.Explainer(MODELS[sector], neutral_background)
+            
             CAT_COLS_BY_SECTOR[sector] = _extract_cat_cols(pre)  # ground-truth from model
 
             print(f"SYSTEM: Loaded {sector} model.")
@@ -240,7 +246,16 @@ def predict(payload: PredictPayload, api_key: str = Security(get_api_key)):
         features_clean = [f.split("__")[1] if "__" in f else f for f in all_feat]
 
         shap_vals  = EXPLAINERS[sector](pd.DataFrame(processed, columns=features_clean))
-        top_driver = features_clean[int(np.argmax(np.abs(shap_vals.values[0])))]
+        
+        # FIND THE TRUE DRIVER (Highest POSITIVE contribution to Churn)
+        shap_contributions = shap_vals.values[0]
+        if np.max(shap_contributions) > 0:
+            # Get the index of the highest positive value only
+            driver_idx = int(np.argmax(shap_contributions))
+            top_driver = features_clean[driver_idx]
+        else:
+            # If no feature is pushing for churn, identify the least helpful one
+            top_driver = "Neutral / Stable Profile"
 
         return {
             "prediction_id":     str(uuid.uuid4()),
