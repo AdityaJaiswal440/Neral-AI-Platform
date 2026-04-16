@@ -11,109 +11,109 @@ from pydantic import BaseModel
 from typing import Dict, Any
 
 # 1. Config & Security
-# ENSURE: Hugging Face Secret NERAL_SECRET = NERAL_SECRET_2026
 API_KEY = os.getenv("NERAL_SECRET", "NERAL_SECRET_2026")
 api_key_header = APIKeyHeader(name="x-api-key", auto_error=False)
-app = FastAPI(title="Neral AI: Absolute Core", version="1.0")
 
+app = FastAPI(title="Neral AI: Absolute Core", version="1.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 def get_api_key(api_key: str = Security(api_key_header)):
     if api_key == API_KEY: return api_key
-    raise HTTPException(status_code=403, detail="Forbidden: Check NERAL_SECRET and x-api-key")
+    raise HTTPException(status_code=403, detail="Forbidden: Check NERAL_SECRET vs x-api-key")
 
-# 2. Global Models
+# 2. Global Registry
 MODELS, EXPLAINERS, PREPROCESSORS = {}, {}, {}
 
-def apply_feature_engineering(df_in: pd.DataFrame, sector: str):
-    """Total Type Segregation: The only way to stop ufunc 'isnan' errors."""
-    raw = df_in.iloc[0].to_dict()
+def apply_feature_engineering(payload_dict: dict, sector: str):
+    """Rebuilds data from a dictionary to guarantee type purity."""
     
-    def get_val(key, default=None):
+    def get_raw(key, default=None):
+        # Universal lookup: check key, underscore, space, and lowercase
         for k in [key, key.replace(' ', '_'), key.replace('_', ' '), key.lower()]:
-            if k in raw: return raw[k] if pd.notna(raw[k]) else default
+            if k in payload_dict:
+                val = payload_dict[k]
+                return val if val is not None and str(val).lower() != 'nan' else default
         return default
 
-    # Mapping categorical columns per sector
-    cat_lookup = {
+    # Define strict categorical and numerical maps
+    sector_cats = {
         'aviation': ['Class', 'Customer Type', 'Type of Travel'],
         'ecommerce': ['customer_segment', 'tenure_group', 'contract_type', 'signup_channel', 'payment_method', 'complaint_type', 'city']
     }.get(sector, [])
 
-    engineered = {}
+    # The blueprint for the new row
+    row = {}
 
     if sector == 'aviation':
-        dist = float(pd.to_numeric(get_val('Flight_Distance'), errors='coerce') or 0)
-        dep_d = float(pd.to_numeric(get_val('Departure_Delay_Minutes'), errors='coerce') or 0)
-        arr_d = float(pd.to_numeric(get_val('Arrival_Delay_Minutes'), errors='coerce') or 0)
-        engineered.update({
+        dist = float(get_raw('Flight_Distance', 0))
+        dep_d = float(get_raw('Departure_Delay_Minutes', 0))
+        arr_d = float(get_raw('Arrival_Delay_Minutes', 0))
+        row.update({
             'distance_log': np.log1p(dist),
             'delay_intensity_log': np.log1p(dep_d + arr_d),
-            'is_business_travel': 1.0 if str(get_val('Type of Travel')) == 'Business travel' else 0.0,
-            'is_disloyal_customer': 1.0 if str(get_val('Customer Type')) == 'disloyal Customer' else 0.0
+            'is_business_travel': 1.0 if str(get_raw('Type of Travel')) == 'Business travel' else 0.0,
+            'is_disloyal_customer': 1.0 if str(get_raw('Customer Type')) == 'disloyal Customer' else 0.0
         })
         ratings = ['Inflight wifi service', 'Online boarding', 'Seat comfort', 'Inflight entertainment']
-        for r in ratings: engineered[r] = float(pd.to_numeric(get_val(r), errors='coerce') or 3.0)
-        engineered['csat_score'] = sum(engineered[r] for r in ratings) / 4.0
-        engineered['loyalty_shock_score'] = engineered['csat_score'] * engineered['is_disloyal_customer']
-        engineered['service_friction_score'] = (5.0 - engineered['Inflight wifi service']) + (5.0 - engineered['Online boarding'])
-        std = ['Inflight service', 'Food and drink', 'Baggage handling', 'Checkin service', 'On-board service', 
-               'Cleanliness', 'Gate location', 'Leg room service', 'Ease of Online booking', 'Departure/Arrival time convenient']
-        for s in std: engineered[s] = float(pd.to_numeric(get_val(s), errors='coerce') or 3.0)
+        for r in ratings: row[r] = float(get_raw(r, 3.0))
+        row['csat_score'] = sum(row[r] for r in ratings) / 4.0
+        row['loyalty_shock_score'] = row['csat_score'] * row['is_disloyal_customer']
+        row['service_friction_score'] = (5.0 - row['Inflight wifi service']) + (5.0 - row['Online boarding'])
+        for s in ['Inflight service', 'Food and drink', 'Baggage handling', 'Checkin service', 'On-board service', 
+                  'Cleanliness', 'Gate location', 'Leg room service', 'Ease of Online booking', 'Departure/Arrival time convenient']:
+            row[s] = float(get_raw(s, 3.0))
 
     elif sector == 'ecommerce':
-        m_charges = float(pd.to_numeric(get_val('Monthly_Charges'), errors='coerce') or 30.0)
-        tenure = float(pd.to_numeric(get_val('Tenure'), errors='coerce') or 1.0)
-        usage = float(pd.to_numeric(get_val('Total_Usage_GB'), errors='coerce') or 100.0)
-        logins = float(pd.to_numeric(get_val('monthly_logins'), errors='coerce') or 1.0)
-        time = float(pd.to_numeric(get_val('total_monthly_time'), errors='coerce') or 500.0)
-        feats = float(pd.to_numeric(get_val('features_used'), errors='coerce') or 2.0)
+        m_charges = float(get_raw('Monthly_Charges', 30.0))
+        tenure = float(get_raw('Tenure', 1.0))
+        usage = float(get_raw('Total_Usage_GB', 100.0))
+        logins = float(get_raw('monthly_logins', 1.0))
+        time = float(get_raw('total_monthly_time', 500.0))
+        feats = float(get_raw('features_used', 2.0))
         
-        engineered.update({
+        row.update({
             'monthly_fee_log': np.log1p(m_charges),
             'value_score_log': np.log1p(usage * tenure),
-            'last_login_days_log': np.log1p(float(pd.to_numeric(get_val('Last_Login_Days'), errors='coerce') or 5.0)),
+            'last_login_days_log': np.log1p(float(get_raw('Last_Login_Days', 5.0))),
             'feature_intensity_log': np.log1p(feats),
-            'support_intensity_log': np.log1p(float(pd.to_numeric(get_val('support_tickets'), errors='coerce') or 0.0)),
+            'support_intensity_log': np.log1p(float(get_raw('support_tickets', 0.0))),
             'session_strength_log': np.log1p(time / (logins + 1.0)),
-            'csat_score': float(pd.to_numeric(get_val('csat'), errors='coerce') or 3.0),
-            'nps_normalized': (pd.to_numeric(get_val('nps'), errors='coerce') or 7.0) / 10.0,
+            'csat_score': float(get_raw('csat', 3.0)),
+            'nps_normalized': (float(get_raw('nps', 7.0)) / 10.0),
             'is_zombie_user': 1.0 if logins < 2.0 else 0.0,
             'engagement_efficiency': time / (feats + 1.0)
         })
-        engineered['loyalty_shock_score'] = (1.0 - engineered['nps_normalized']) * (1 / (tenure + 1))
-        engineered['loyalty_resilience'] = tenure * engineered['csat_score']
+        row['loyalty_shock_score'] = (1.0 - row['nps_normalized']) * (1.0 / (tenure + 1.0))
+        row['loyalty_resilience'] = tenure * row['csat_score']
 
-        num_feats = ['usage_density', 'discount_applied', 'monthly_logins', 'features_used', 'total_monthly_time', 
-                     'weekly_active_days', 'is_passive_promoter', 'is_advocate', 'is_recency_danger', 
-                     'is_high_friction_payment', 'is_bouncer', 'is_hidden_dissatisfaction', 'payment_structural_risk',
-                     'support_tickets_clipped', 'escalations_clipped', 'payment_failures_clipped', 'referral_count_clipped', 
-                     'usage_growth_rate', 'email_open_rate_fixed']
-        for n in num_feats:
+        for n in ['usage_density', 'discount_applied', 'monthly_logins', 'features_used', 'total_monthly_time', 
+                  'weekly_active_days', 'is_passive_promoter', 'is_advocate', 'is_recency_danger', 
+                  'is_high_friction_payment', 'is_bouncer', 'is_hidden_dissatisfaction', 'payment_structural_risk',
+                  'support_tickets_clipped', 'escalations_clipped', 'payment_failures_clipped', 'referral_count_clipped', 
+                  'usage_growth_rate', 'email_open_rate_fixed']:
             clean = n.split('_')[0]
-            engineered[n] = float(pd.to_numeric(get_val(clean), errors='coerce') or 0.0)
+            row[n] = float(get_raw(clean, 0.0))
 
-    # Reconstruct the Dataframe to guarantee no mixed-types
+    # Final Alignment with Preprocessor
     required = PREPROCESSORS[sector].feature_names_in_
     final_dict = {}
     for col in required:
-        if col in cat_lookup:
-            val = get_val(col, "unknown")
-            # The kill-switch: force everything to string and strip spaces
-            final_dict[col] = str(val).strip() if val is not None else "unknown"
+        if col in sector_cats:
+            val = get_raw(col, "unknown")
+            final_dict[col] = str(val).strip()
         else:
-            val = engineered.get(col, get_val(col))
-            final_dict[col] = float(pd.to_numeric(val, errors='coerce') or 0.0)
+            final_dict[col] = float(row.get(col, get_raw(col, 0.0)))
 
-    # FINAL BARRIER: Re-create DF with explicit types
+    # Reconstruct DF from dictionary with absolute type segregation
     final_df = pd.DataFrame([final_dict])
     for col in required:
-        if col in cat_lookup:
-            final_df[col] = final_df[col].astype(object) # Forces sklearn to treat as categorical
+        if col in sector_cats:
+            # Force NumPy to treat this as a pure string object
+            final_df[col] = final_df[col].astype(str)
         else:
             final_df[col] = final_df[col].astype(np.float64)
             
-    return final_df[required]
+    return final_df
 
 @app.on_event("startup")
 def load_models():
@@ -137,33 +137,29 @@ def predict(payload: PredictPayload, api_key: str = Security(get_api_key)):
     sector = payload.sector.lower()
     if sector not in MODELS: raise HTTPException(status_code=400, detail="Invalid Sector")
     
-    # 1. Engineering Barrier
-    df_ready = apply_feature_engineering(pd.DataFrame([payload.features]), sector)
+    # 1. Total Reconstruction
+    df_ready = apply_feature_engineering(payload.features, sector)
     
-    # 2. Transformation with extra safety
+    # 2. Inference & Diagnosis
     try:
         processed = PREPROCESSORS[sector].transform(df_ready)
+        prob = MODELS[sector].predict_proba(processed)[0, 1]
+        
+        all_feat = PREPROCESSORS[sector].get_feature_names_out()
+        features_clean = [f.split('__')[1] if '__' in f else f for f in all_feat]
+        shap_vals = EXPLAINERS[sector](pd.DataFrame(processed, columns=features_clean))
+        top_driver = features_clean[np.argmax(np.abs(shap_vals.values[0]))]
+        
+        return {
+            "prediction_id": str(uuid.uuid4()),
+            "probability": round(float(prob), 4),
+            "trigger_diagnosis": top_driver,
+            "prescriptive_rescue": "High Engagement Intervention" if prob > 0.5 else "Standard Review",
+            "status": "success"
+        }
     except Exception as e:
-        # Emergency cast to handle unexpected sklearn state
-        print(f"DEBUG: Transformation failed, applying emergency cast. Error: {str(e)}")
-        for col in df_ready.columns:
-            if df_ready[col].dtype == object: df_ready[col] = df_ready[col].astype(str)
-        processed = PREPROCESSORS[sector].transform(df_ready)
-
-    # 3. Inference & Explainability
-    prob = MODELS[sector].predict_proba(processed)[0, 1]
-    all_feat = PREPROCESSORS[sector].get_feature_names_out()
-    features_clean = [f.split('__')[1] if '__' in f else f for f in all_feat]
-    shap_vals = EXPLAINERS[sector](pd.DataFrame(processed, columns=features_clean))
-    top_driver = features_clean[np.argmax(np.abs(shap_vals.values[0]))]
-    
-    return {
-        "prediction_id": str(uuid.uuid4()),
-        "probability": round(float(prob), 4),
-        "trigger_diagnosis": top_driver,
-        "prescriptive_rescue": "High Engagement Intervention" if prob > 0.5 else "Standard Review",
-        "status": "success"
-    }
+        print(f"CRITICAL TRANSFORM ERROR: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Inference Error: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn
