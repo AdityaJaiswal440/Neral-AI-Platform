@@ -28,29 +28,23 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, 
 MODELS, EXPLAINERS, PREPROCESSORS = {}, {}, {}
 
 def apply_feature_engineering(df: pd.DataFrame, sector: str):
-    """Surgical feature replication with Type-Locking to prevent ufunc 'isnan' errors."""
+    """Defensive feature replication with Strict Type-Locking."""
     
     def get_raw(key, default=None):
-        # Look for the exact key, then underscore, then space, then lowercase
-        return df.get(key, df.get(key.replace(' ', '_'), df.get(key.replace('_', ' '), df.get(key.lower(), default))))
+        return df.get(key, df.get(key.replace(' ', '_'), df.get(key.replace('_', ' '), default)))
 
     def f_num(key, default=0.0):
         val = get_raw(key, default)
-        if isinstance(val, pd.Series):
-            val = val.iloc[0] if not val.empty else default
-        try:
-            return float(val) if val is not None else default
-        except:
-            return default
+        if isinstance(val, pd.Series): val = val.iloc[0] if not val.empty else default
+        try: return float(val) if val is not None else default
+        except: return default
 
     def f_str(key, default="unknown"):
         val = get_raw(key, default)
-        if isinstance(val, pd.Series):
-            val = val.iloc[0] if not val.empty else default
+        if isinstance(val, pd.Series): val = val.iloc[0] if not val.empty else default
         return str(val) if val is not None else default
 
     if sector == 'aviation':
-        # Aviation Logic (Verified)
         df['distance_log'] = np.log1p(f_num('Flight_Distance'))
         df['delay_intensity_log'] = np.log1p(f_num('Departure_Delay_Minutes') + f_num('Arrival_Delay_Minutes'))
         df['is_business_travel'] = 1 if f_str('Type_of_Travel') == 'Business travel' else 0
@@ -68,21 +62,18 @@ def apply_feature_engineering(df: pd.DataFrame, sector: str):
         for col in std_cols: df[col] = f_num(col, 3.0)
 
     elif sector == 'ecommerce':
-        # E-commerce 'Type-Locked' Feature Factory
-        # A. Numerical Features (Force to Float)
+        # Numerical Blocks
         df['monthly_fee_log'] = np.log1p(f_num('Monthly_Charges', 30.0))
         df['value_score_log'] = np.log1p(f_num('Total_Usage_GB', 100.0) * f_num('Tenure', 1.0))
         df['last_login_days_log'] = np.log1p(f_num('Last_Login_Days', 5.0))
         df['feature_intensity_log'] = np.log1p(f_num('features_used', 2.0))
         df['support_intensity_log'] = np.log1p(f_num('support_tickets', 0.0))
         df['session_strength_log'] = np.log1p(f_num('total_monthly_time', 500.0) / (f_num('monthly_logins', 1.0) + 1.0))
+        
+        for col in ['support_tickets_clipped', 'escalations_clipped', 'payment_failures_clipped', 'referral_count_clipped']:
+            df[col] = f_num(col.replace('_clipped', ''))
 
-        df['support_tickets_clipped'] = np.clip(f_num('support_tickets'), 0, 10)
-        df['escalations_clipped'] = np.clip(f_num('escalations'), 0, 5)
-        df['payment_failures_clipped'] = np.clip(f_num('payment_failures'), 0, 3)
-        df['referral_count_clipped'] = np.clip(f_num('referral_count'), 0, 20)
-
-        # B. Binary Flags (Int)
+        # Boolean Flags
         df['is_zombie_user'] = 1 if f_num('monthly_logins') < 2 else 0
         df['is_slow_ghost'] = 1 if f_num('total_monthly_time') < 100 and f_num('Tenure') > 6 else 0
         df['is_passive_promoter'] = 1 if f_num('nps', 7) in [7, 8] else 0
@@ -92,7 +83,7 @@ def apply_feature_engineering(df: pd.DataFrame, sector: str):
         df['is_bouncer'] = 1 if f_num('email_open_rate') < 0.05 else 0
         df['is_hidden_dissatisfaction'] = 1 if f_num('csat', 3) < 3 and f_num('support_tickets') == 0 else 0
 
-        # C. Calculated Scores
+        # Calculated Scores
         df['csat_score'] = f_num('csat', 3.0)
         df['nps_normalized'] = f_num('nps', 7.0) / 10.0
         df['loyalty_shock_score'] = (1 - df['nps_normalized']) * (1 / (f_num('Tenure', 1.0) + 1))
@@ -102,20 +93,19 @@ def apply_feature_engineering(df: pd.DataFrame, sector: str):
         df['email_open_rate_fixed'] = f_num('email_open_rate', 0.2)
         df['payment_structural_risk'] = 1 if f_num('payment_failures') > 1 else 0
 
-        # D. Categorical Features (FORCE TO STRING to avoid isnan errors)
+        # Categorical Block (Type-Locked as Strings)
         cat_cols = ['customer_segment', 'tenure_group', 'contract_type', 'signup_channel', 'payment_method', 'complaint_type', 'city']
-        for col in cat_cols: df[col] = f_str(col, "unknown")
+        for col in cat_cols: df[col] = f_str(col)
         
-        # E. Remaining Raw Numerical columns
+        # Raw Numerical Block
         raw_num = ['discount_applied', 'monthly_logins', 'features_used', 'total_monthly_time', 'weekly_active_days', 'usage_density']
         for col in raw_num: df[col] = f_num(col)
-                
-    # DYNAMIC ALIGNMENT (Final Safety Net)
-    required_cols = PREPROCESSORS[sector].feature_names_in_
-    for col in required_cols:
+
+    # Final Schema Shield
+    required = PREPROCESSORS[sector].feature_names_in_
+    for col in required:
         if col not in df.columns:
-            # If we don't know the type, default to 0.0 float to be safe with isnan
-            df[col] = 0.0
+            df[col] = 0.0 # Numeric default to avoid isnan crash
                 
     return df
 
@@ -148,9 +138,6 @@ def extract_top_driver(sector: str, df_final: pd.DataFrame) -> str:
 @app.post("/predict")
 def predict(payload: PredictPayload, api_key: str = Security(get_api_key)):
     sector = payload.sector.lower()
-    if sector not in MODELS: raise HTTPException(status_code=400, detail="Invalid sector")
-    
-    # Process with Type-Locking
     df_raw = pd.DataFrame([payload.features])
     df_ready = apply_feature_engineering(df_raw, sector)
     
@@ -166,7 +153,3 @@ def predict(payload: PredictPayload, api_key: str = Security(get_api_key)):
         "prescriptive_rescue": "High Engagement Intervention" if prob > 0.5 else "Standard Review",
         "status": "success"
     }
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
