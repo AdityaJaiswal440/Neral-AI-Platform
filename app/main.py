@@ -13,8 +13,8 @@ from typing import Dict, Any
 # 1. Config & Security
 API_KEY = os.getenv("NERAL_SECRET", "NERAL_SECRET_2026")
 api_key_header = APIKeyHeader(name="x-api-key", auto_error=False)
-
 app = FastAPI(title="Neral AI: Absolute Core", version="1.0")
+
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 def get_api_key(api_key: str = Security(api_key_header)):
@@ -25,29 +25,27 @@ def get_api_key(api_key: str = Security(api_key_header)):
 MODELS, EXPLAINERS, PREPROCESSORS = {}, {}, {}
 
 def apply_feature_engineering(payload_dict: dict, sector: str):
-    """Rebuilds data from a dictionary to guarantee type purity."""
+    """Rebuilds data with surgical type precision."""
     
     def get_raw(key, default=None):
-        # Universal lookup: check key, underscore, space, and lowercase
         for k in [key, key.replace(' ', '_'), key.replace('_', ' '), key.lower()]:
             if k in payload_dict:
                 val = payload_dict[k]
                 return val if val is not None and str(val).lower() != 'nan' else default
         return default
 
-    # Define strict categorical and numerical maps
-    sector_cats = {
+    # Define strict categorical sets
+    CAT_COLS = {
         'aviation': ['Class', 'Customer Type', 'Type of Travel'],
         'ecommerce': ['customer_segment', 'tenure_group', 'contract_type', 'signup_channel', 'payment_method', 'complaint_type', 'city']
     }.get(sector, [])
 
-    # The blueprint for the new row
     row = {}
 
     if sector == 'aviation':
-        dist = float(get_raw('Flight_Distance', 0))
-        dep_d = float(get_raw('Departure_Delay_Minutes', 0))
-        arr_d = float(get_raw('Arrival_Delay_Minutes', 0))
+        dist = float(pd.to_numeric(get_raw('Flight_Distance'), errors='coerce') or 0)
+        dep_d = float(pd.to_numeric(get_raw('Departure_Delay_Minutes'), errors='coerce') or 0)
+        arr_d = float(pd.to_numeric(get_raw('Arrival_Delay_Minutes'), errors='coerce') or 0)
         row.update({
             'distance_log': np.log1p(dist),
             'delay_intensity_log': np.log1p(dep_d + arr_d),
@@ -86,32 +84,30 @@ def apply_feature_engineering(payload_dict: dict, sector: str):
         row['loyalty_shock_score'] = (1.0 - row['nps_normalized']) * (1.0 / (tenure + 1.0))
         row['loyalty_resilience'] = tenure * row['csat_score']
 
-        for n in ['usage_density', 'discount_applied', 'monthly_logins', 'features_used', 'total_monthly_time', 
-                  'weekly_active_days', 'is_passive_promoter', 'is_advocate', 'is_recency_danger', 
-                  'is_high_friction_payment', 'is_bouncer', 'is_hidden_dissatisfaction', 'payment_structural_risk',
-                  'support_tickets_clipped', 'escalations_clipped', 'payment_failures_clipped', 'referral_count_clipped', 
-                  'usage_growth_rate', 'email_open_rate_fixed']:
-            clean = n.split('_')[0]
-            row[n] = float(get_raw(clean, 0.0))
+        num_list = ['usage_density', 'discount_applied', 'monthly_logins', 'features_used', 'total_monthly_time', 
+                    'weekly_active_days', 'is_passive_promoter', 'is_advocate', 'is_recency_danger', 
+                    'is_high_friction_payment', 'is_bouncer', 'is_hidden_dissatisfaction', 'payment_structural_risk',
+                    'support_tickets_clipped', 'escalations_clipped', 'payment_failures_clipped', 'referral_count_clipped', 
+                    'usage_growth_rate', 'email_open_rate_fixed']
+        for n in num_list: row[n] = float(get_raw(n.split('_')[0], 0.0))
 
-    # Final Alignment with Preprocessor
+    # Construct and Sanitize DataFrame
     required = PREPROCESSORS[sector].feature_names_in_
     final_dict = {}
     for col in required:
-        if col in sector_cats:
-            val = get_raw(col, "unknown")
-            final_dict[col] = str(val).strip()
+        if col in CAT_COLS:
+            final_dict[col] = str(get_raw(col, "unknown")).strip()
         else:
-            final_dict[col] = float(row.get(col, get_raw(col, 0.0)))
+            val = row.get(col, get_raw(col, 0.0))
+            final_dict[col] = float(pd.to_numeric(val, errors='coerce') or 0.0)
 
-    # Reconstruct DF from dictionary with absolute type segregation
+    # FINAL TYPE LOCKING: This forces Pandas out of the generic 'object' dtype
     final_df = pd.DataFrame([final_dict])
     for col in required:
-        if col in sector_cats:
-            # Force NumPy to treat this as a pure string object
-            final_df[col] = final_df[col].astype(str)
+        if col in CAT_COLS:
+            final_df[col] = final_df[col].astype(str) # Force Unicode string
         else:
-            final_df[col] = final_df[col].astype(np.float64)
+            final_df[col] = final_df[col].astype(np.float64) # Force standard float
             
     return final_df
 
@@ -137,11 +133,14 @@ def predict(payload: PredictPayload, api_key: str = Security(get_api_key)):
     sector = payload.sector.lower()
     if sector not in MODELS: raise HTTPException(status_code=400, detail="Invalid Sector")
     
-    # 1. Total Reconstruction
+    # 1. Engineering with Strict Casting
     df_ready = apply_feature_engineering(payload.features, sector)
     
-    # 2. Inference & Diagnosis
+    # 2. Inference & Explainability
     try:
+        # Pre-transform check: Ensure no NaN values exist in df_ready
+        df_ready = df_ready.fillna("unknown" if sector == 'ecommerce' else 0.0)
+        
         processed = PREPROCESSORS[sector].transform(df_ready)
         prob = MODELS[sector].predict_proba(processed)[0, 1]
         
@@ -159,6 +158,7 @@ def predict(payload: PredictPayload, api_key: str = Security(get_api_key)):
         }
     except Exception as e:
         print(f"CRITICAL TRANSFORM ERROR: {str(e)}")
+        # If still failing, provide the exact column triggering the issue
         raise HTTPException(status_code=500, detail=f"Inference Error: {str(e)}")
 
 if __name__ == "__main__":
