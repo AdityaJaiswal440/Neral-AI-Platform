@@ -1,11 +1,18 @@
-# BUILD: 2026-04-16-v5.8-HARMONIZED
-fastapi==0.115.6
-uvicorn[standard]==0.32.1
-pydantic==2.10.4
+# --- Neral AI Core Dependencies ---
+fastapi==0.115.3
+uvicorn==0.32.0
+pydantic==2.9.2
+python-dotenv==1.0.1
+
+# --- Machine Learning Stack ---
+scikit-learn==1.7.2
+xgboost==2.1.1
+shap==0.46.0
 joblib==1.4.2
 pandas==2.2.3
-numpy>=1.26.4,<2.0.0
-shap==0.46.0
-xgboost==2.1.3
-scikit-learn==1.7.2
-python-dotenv==1.0.1
+numpy==1.26.4
+
+# --- Frontend & Visualization ---
+streamlit==1.39.0
+requests==2.32.3
+plotly==5.24.1
