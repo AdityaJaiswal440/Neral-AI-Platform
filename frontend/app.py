@@ -83,7 +83,7 @@ with col2:
     if execute:
         try:
             # Pointing to the new modular backend
-            url = "http://localhost:8000/v1/predict" 
+            url = "http://127.0.0.1:8000/v1/predict"
             headers = {"x-api-key": "NERAL_SECRET_2026"}
             
             payload = json.loads(input_json)

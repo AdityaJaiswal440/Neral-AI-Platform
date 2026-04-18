@@ -1,13 +1,12 @@
 ---
-title: Neral AI Core
-emoji: 🛡️
-colorFrom: slate
-colorTo: blue
+title: Neral AI Backend
+emoji: 🛰️
+colorFrom: red
+colorTo: black
 sdk: docker
-app_port: 8000
-pinned: true
+app_port: 7860
 ---
-
+Deployed version of the HCIM engine.
 # ◈ Neral AI - Precision Churn Intelligence (PCI)
 ### *Predictive Retention for High-Value Enterprise Growth*
 
