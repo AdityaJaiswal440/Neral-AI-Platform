@@ -5,7 +5,7 @@ import pandas as pd
 import plotly.graph_objects as go
 
 # --- THE FOUNDRY AESTHETIC (Neon Carbon) ---
-st.set_page_config(page_title="NERAL AI | FOUNDRY TERMINAL", layout="wide", page_icon="🧪")
+st.set_page_config(page_title="NERAL AI | Churn Intelligence", layout="wide", page_icon="🧪")
 
 st.markdown("""
     <style>
