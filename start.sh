@@ -1,15 +1,11 @@
 #!/bin/bash
 
-# 1. Kill any existing processes (Safety check)
-fuser -k 8000/tcp
-fuser -k 7860/tcp
-
-# 2. Start the Backend on Port 8000 (The Brain)
+# 1. Start the Brain (FastAPI) in the background on port 8000
 uvicorn app.main:app --host 0.0.0.0 --port 8000 &
 
-# 3. Wait for the engine to warm up
-sleep 10
+# 2. Critical: Wait for models to load before the UI connects
+sleep 15
 
-# 4. Start the Frontend on Port 7860 (The Spotlight)
-# We add the "headless" flag for cloud stability
+# 3. Start the Terminal (Streamlit) on port 7860
+# Hugging Face ONLY displays what is on 7860
 streamlit run frontend/app.py --server.port 7860 --server.address 0.0.0.0 --server.headless true
