@@ -246,43 +246,64 @@ def predict(payload: PredictPayload, api_key: str = Security(get_api_key)):
             detail=f"Invalid sector '{sector}'. Available: {list(MODELS.keys())}"
         )
 
-    df_ready = apply_feature_engineering(payload.features, sector)
+# 1. FETCH THE GROUND TRUTH KEYS (What the model was born with)
+    expected_keys = list(PREPROCESSORS[sector].feature_names_in_)
+    
+    # 2. CASE-INSENSITIVE HANDSHAKE
+    # Normalize the UI keys but map them strictly to the model's required casing
+    p_low = {str(k).lower(): v for k, v in payload.features.items()}
+    
+    # 3. RECONSTRUCT THE PAYLOAD IN THE EXACT TRAINING ORDER
+    # This kills the "Index Shift" before apply_feature_engineering even runs
+    ordered_features = {}
+    for key in expected_keys:
+        # Match "Monthly_Charges" (expected) to "monthly_charges" (UI)
+        ordered_features[key] = p_low.get(key.lower(), None)
+
+    # 4. RUN FEATURE ENGINEERING
+    # We pass the cleaned, ordered features into your engineering engine
+    df_ready = apply_feature_engineering(ordered_features, sector)
+    df_final = df_ready[expected_keys] # Double-lock the order
 
     try:
-        # 1. GENERATE TRANSFORMED DATA
-        processed_array = PREPROCESSORS[sector].transform(df_ready)
-        
-        # 2. DYNAMIC NAME EXTRACTION (Version-Resilient)
-        # We pull names directly from the active preprocessor instance
+        # 5. TRANSFORM 
+        processed_array = PREPROCESSORS[sector].transform(df_final)
+        if hasattr(processed_array, "toarray"):
+            processed_array = processed_array.toarray()
+
+        # 6. SHAP ALIGNMENT
         raw_cols = PREPROCESSORS[sector].get_feature_names_out()
-        feature_names = [c.split('__')[-1] for c in raw_cols]
+        feature_names_out = [c.split('__')[-1] for c in raw_cols]
         
-        # 3. CLASS-1 SHAP TARGETING
         explainer = shap.TreeExplainer(MODELS[sector])
-        shap_values = explainer.shap_values(processed_array)
+        # We pass as DF to force SHAP to respect the column names
+        X_df = pd.DataFrame(processed_array, columns=feature_names_out)
+        shap_values = explainer.shap_values(X_df)
         
-        # Handle SHAP output variety (Ensure we grab Class 1 - Churn)
+        # Grab Churn Class (1)
         if isinstance(shap_values, list):
-            # We target the probability of Class 1
             contributions = shap_values[1][0] 
         else:
-            # If it's a single array, index it for the first row
-            contributions = shap_values[0]
+            contributions = shap_values[0, :, 1] if len(shap_values.shape) == 3 else shap_values[0]
 
-        # 4. SYSTEM AUDIT (Check your HF logs for this output!)
-        # This dictionary maps EVERY feature to its raw SHAP value
-        full_audit = dict(zip(feature_names, contributions))
-        print(f"--- NERAL AI SYSTEM AUDIT [{sector.upper()}] ---")
-        for k, v in sorted(full_audit.items(), key=lambda x: x[1], reverse=True)[:5]:
-            print(f"DRIVE SIGNAL: {k} -> {v:.4f}")
-
-        # 5. THE TRUE DRIVER MASK (Ignored negative 'Anchor' values)
-        drivers = {name: val for name, val in full_audit.items() if val > 0}
+        # 7. THE GROUND TRUTH AUDIT (THE FORENSIC LOG)
+        print(f"\n--- NERAL AI GROUND TRUTH [v6.1] ---")
+        full_map = []
+        for i, (name, contribution) in enumerate(zip(feature_names_out, contributions)):
+            # We pull the value directly from the final processed array
+            val = float(processed_array[0][i])
+            
+            if i < 8: # Show more features in logs to verify the "CSAT vs Charges" swap
+                print(f"INDEX {i:<2} | NAME: {name:<22} | PROCESSED_VAL: {val:>8.2f} | SHAP: {contribution:>8.4f}")
+            
+            full_map.append({"name": name, "shap": contribution})
         
-        if drivers:
-            top_driver = max(drivers, key=drivers.get)
-        else:
-            top_driver = "STABLE BEHAVIORAL PROFILE"
+        # Sort to find drivers
+        full_map.sort(key=lambda x: x['shap'], reverse=True)
+
+        # 8. THE POSITIVE MASK
+        drivers = {e['name']: e['shap'] for e in full_map if e['shap'] > 0}
+        top_driver = max(drivers, key=drivers.get) if drivers else "STABLE BEHAVIORAL PROFILE"
 
         return {
             "prediction_id":     str(uuid.uuid4()),
@@ -293,8 +314,7 @@ def predict(payload: PredictPayload, api_key: str = Security(get_api_key)):
     except Exception as e:
         print(f"SYSTEM CRITICAL FAILURE: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Inference Failure: {str(e)}")
-
-
+        
 # --- STEP 9: LOCAL DEV ENTRYPOINT ---
 if __name__ == "__main__":
     import uvicorn
