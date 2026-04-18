@@ -52,6 +52,18 @@ The Churn Project introduces a unified high-fidelity engine leveraging:
 * **Frontend:** React, Tailwind CSS, Lucide Icons
 * **Deployment:** Docker (Containerized for seamless local deployment)
 
+## 🛠️ Technical Excellence: Solving the Explainability Paradox
+
+In production-grade AI, raw probability is only half the battle. During the development of Neral AI, we encountered a critical **Feature Alignment Drift** where SHAP explanations were logically inverted (e.g., attributing churn risk to high CSAT scores).
+
+### **The v6.1 Ground Truth Architecture**
+To solve this, we implemented a proprietary **Zero-Drift Logic** layer in the FastAPI backend:
+* **Index Locking:** Forced physical mapping between the Preprocessor's `get_feature_names_out()` and the SHAP explainer to prevent index displacement.
+* **Version Parity Guard:** A runtime "Nuclear Restart" script that ensures `scikit-learn 1.7.2` consistency across heterogeneous deployment environments.
+* **Case-Insensitive Handshake:** A case-normalized feature ingestion engine to prevent "Key Drops" during UI-to-Model transmission.
+
+> **Detailed Technical Breakdown:** See [SHAP_ALIGNMENT_FIXED.md](./SHAP_ALIGNMENT_FIXED.md) for the forensic report on these fixes.
+
 ## 💻 Getting Started (Local Development)
 
 The project is split into two environments: the React frontend and the FastAPI backend.
@@ -62,3 +74,8 @@ cd frontend
 npm install
 npm run dev
 
+### 2. Running the Backend (FastAPI)
+```bash
+# Ensure you have the models/ directory with .joblib files
+pip install -r requirements.txt
+python main.py
