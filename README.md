@@ -407,7 +407,6 @@ Neral-AI-Platform/
 
 | Field | Value |
 |---|---|
-| **Institution** | Gati Shakti Vishwavidyalaya (GSV), Vadodara — AI & Data Science |
 | **Lead Architect** | Aditya Jaiswal |
 | **Core Contribution** | Formal closure of the Explainability–Action Gap via Atomic SHAP Alignment in a production FastAPI inference engine with multi-sector Behavioral Foundry pipelines and a Fail-Closed Secured REST Gateway |
 | **Sectors** | Aviation (loyalty fragility under service friction) · E-commerce/Streaming (behavioral decay + payment structural risk) |
