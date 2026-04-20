@@ -142,7 +142,7 @@ This resolves to a **10× False Negative penalty** for both deployed sectors. Th
 
 The HCIM's inference core is a K-tree additive ensemble trained under a regularized, asymmetric objective:
 
-$$\mathcal{L}(\theta) = \sum_{i=1}^{n} w_i \left[ y_i \log\hat{p}_i + (1 - y_i)\log(1 - \hat{p}_i) \right] + \sum_{k=1}^{K} \Omega(f_k)$$
+$$\mathcal{L}(\theta) = \sum_{i=1}^{n} w_i \left[ y_i \log \hat{p}_i + (1 - y_i) \log (1 - \hat{p}_i) \right] + \sum_{k=1}^{K} \Omega(f_k)$$
 
 where the complexity penalty on each tree is:
 
@@ -159,7 +159,7 @@ $$\Omega(f_k) = \gamma T_k + \frac{1}{2}\lambda \|w_k\|^2$$
 
 The ensemble output $z$ — the additive sum of all tree outputs — is passed through the sigmoid link function for probabilistic calibration. This is the **Harmonic Termination** step: it collapses the unbounded real-valued ensemble score into a bounded risk probability:
 
-$$P(\text{churn} \mid \mathbf{x}) = \sigma(z) = \frac{1}{1 + e^{-z}}, \qquad z = \sum_{k=1}^{K} f_k(\mathbf{x})$$
+$$P(\mathrm{churn} \mid \mathbf{x}) = \sigma(z) = \frac{1}{1 + e^{-z}}, \qquad z = \sum_{k=1}^{K} f_k(\mathbf{x})$$
 
 The output $\hat{p} \in (0, 1)$ is the **risk coordinate on the Decision Manifold**. It gates the Diagnostic Intelligence pipeline: it is not the final output returned to the caller. It is the trigger condition for Atomic SHAP Attribution — the stage that closes the EAG.
 
@@ -171,7 +171,7 @@ $$\phi_j = \sum_{S \subseteq \mathcal{F} \setminus \{j\}} \frac{|S|!\,(|\mathcal
 
 After Atomic Alignment enforces the bijection $\pi$, the `trigger_diagnosis` is resolved as the argmax of the positive contribution vector:
 
-$$\hat{j}^{*} = \underset{j \in \mathcal{F}}{\arg\max} \; \phi_j \qquad \Rightarrow \qquad \mathtt{trigger} = \mathrm{name}(\hat{j}^{*})$$
+$$\hat{j}^{\ast} = \underset{j \in \mathcal{F}}{\arg\max} \;\; \phi_j \qquad \Rightarrow \qquad \mathtt{trigger} = \mathrm{name}(\hat{j}^{\ast})$$
 
 This is the **Diagnostic Output** — the single behavioral signal most responsible for the predicted churn event, causally attributed to that specific customer's feature vector. It is the operationally actionable product of the entire inference pipeline.
 
