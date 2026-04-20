@@ -10,12 +10,15 @@ app_port: 7860
 # Neral AI Platform · v6.1
 ### Hybrid Churn Intelligence Model (HCIM) — Systems Engineering Reference
 
+**Deployment:** [neral-ai.streamlit.app](https://neral-ai.streamlit.app)  
+**Architect:** [Aditya Jaiswal (LinkedIn)](https://www.linkedin.com/in/19adityajaiswal/)
+
 ![Engine](https://img.shields.io/badge/Engine-HCIM_v6.1_Atomic-red?style=flat-square)
 ![Backend](https://img.shields.io/badge/Backend-FastAPI_on_HF_Spaces-orange?style=flat-square)
 ![Runtime](https://img.shields.io/badge/Runtime-Docker_python3.10--slim-blue?style=flat-square)
 ![SHAP](https://img.shields.io/badge/Explainability-Atomic_SHAP_Alignment_v6.1-blueviolet?style=flat-square)
 ![Status](https://img.shields.io/badge/Status-Production_Locked-brightgreen?style=flat-square)
-![License](https://img.shields.io/badge/License-Proprietary-lightgrey?style=flat-square)
+![License](https://img.shields.io/badge/License-Apache_2.0-blue?style=flat-square)
 
 ---
 
@@ -415,8 +418,8 @@ Neral-AI-Platform/
 
 ## 12. Licensing
 
-This software, all associated model artifacts, the Behavioral Foundry feature engineering methodology, and all architectural designs are the proprietary intellectual property of **Neral AI**. Unauthorized reproduction, distribution, reverse-engineering, or derivative use is prohibited.
+This software, its model architecture designs, and associated documentation are licensed under the **Apache License, Version 2.0**. You may obtain a copy of the License at [http://www.apache.org/licenses/LICENSE-2.0](http://www.apache.org/licenses/LICENSE-2.0).
 
-For licensing, pilot program access, or research collaboration: contact the Lead Architect.
+For industrial pilot program access or specialized research collaboration: contact the Lead Architect via [LinkedIn](https://www.linkedin.com/in/19adityajaiswal/).
 
-© 2026 Neral AI · All Rights Reserved.
+© 2026 Aditya Jaiswal · Neral AI · Open Source under Apache 2.0.
