@@ -303,8 +303,8 @@ Neral-AI-Platform/
 ## 10. Research Context
 
 **Institution:** Gati Shakti Vishwavidyalaya (GSV), Vadodara — Artificial Intelligence & Data Science  
-**Lead Architect:** Aditya Kumar  
-**Sectors Targeted:** Aviation (loyalty fragility under service friction), E-commerce/Streaming (behavioral decay and payment structural risk)  
+**Lead Architect:** Aditya Jaiswal  
+**Sectors Targeted:** E-commerce/Streaming (behavioral decay and payment structural risk) , Aviation (loyalty fragility under service friction),
 **Core Contribution:** Formal closure of the Explainability–Action Gap via Atomic SHAP Alignment in a production FastAPI inference engine, with multi-sector Behavioral Foundry pipelines and a Secured REST Gateway to a Streamlit Command Bridge.
 
 ---
