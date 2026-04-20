@@ -86,7 +86,7 @@ The gateway is **not a proxy** — it is a stateless, key-authenticated inferenc
 
 The HCIM uses XGBoost's built-in cost-sensitivity parameter `scale_pos_weight` to penalize False Negatives (missed churn) at a ratio calibrated to the training set imbalance:
 
-$$\text{scale\_pos\_weight} = \frac{|N_{\text{neg}}|}{|N_{\text{pos}}|}$$
+$$\alpha_{\mathrm{spw}} = \frac{|\mathcal{N}_{\mathrm{neg}}|}{|\mathcal{N}_{\mathrm{pos}}|}$$
 
 For both deployed models, this resolves to **10**, meaning the model incurs a 10× cost penalty for each missed churner relative to a false alarm. This asymmetric loss surface forces the decision boundary toward high recall at the cost of precision — the correct engineering trade-off for retention-critical deployments where the cost of inaction exceeds the cost of intervention.
 
@@ -97,7 +97,7 @@ The underlying boosting objective is the regularised log-loss with L2 penalty on
 $$\mathcal{L}(\theta) = \sum_{i=1}^{n} \left[ w_i \cdot \left( y_i \log(\hat{p}_i) + (1 - y_i) \log(1 - \hat{p}_i) \right) \right] + \sum_{k=1}^{K} \Omega(f_k)$$
 
 where:
-- $w_i = \text{scale\_pos\_weight}$ if $y_i = 1$, else $w_i = 1$
+- $w_i = \alpha_{\mathrm{spw}}$ if $y_i = 1$, else $w_i = 1$ &nbsp;&nbsp;*(where $\alpha_{\mathrm{spw}} = 10$, the class imbalance ratio)*
 - $\Omega(f_k) = \gamma T_k + \frac{1}{2}\lambda \|w_k\|^2$ — tree complexity regularizer
 - $T_k$ = number of leaves in tree $k$, $\lambda = 1$ (L2)
 
@@ -115,7 +115,7 @@ The Shapley value for feature $j$ is computed over the coalition of all features
 
 $$\phi_j = \sum_{S \subseteq \mathcal{F} \setminus \{j\}} \frac{|S|!\,(|\mathcal{F}| - |S| - 1)!}{|\mathcal{F}|!} \left[ v(S \cup \{j\}) - v(S) \right]$$
 
-The EAG is closed if and only if the index map $\pi: j \mapsto \text{feature\_names\_out}[j]$ is bijective and constructed **after** `ColumnTransformer.transform()`. This is enforced in `app/main.py:132`:
+The EAG is closed if and only if the index map $\pi: j \mapsto \mathtt{names}[j]$ is bijective and constructed **after** `ColumnTransformer.transform()`, where $\mathtt{names}$ is the output of `get_feature_names_out()`. This is enforced in `app/main.py:132`:
 
 ```python
 feature_names = [c.split('__')[-1] for c in PREPROCESSORS[sector].get_feature_names_out()]
@@ -123,7 +123,7 @@ feature_names = [c.split('__')[-1] for c in PREPROCESSORS[sector].get_feature_na
 
 The top churn driver is then:
 
-$$\text{trigger\_diagnosis} = \arg\max_{j \in \mathcal{F}} \; \phi_j$$
+$$\hat{j}^{*} = \underset{j \;\in\; \mathcal{F}}{\arg\max} \; \phi_j \quad \Rightarrow \quad \texttt{trigger\_diagnosis} = \mathrm{name}(\hat{j}^{*})$$
 
 ---
 
