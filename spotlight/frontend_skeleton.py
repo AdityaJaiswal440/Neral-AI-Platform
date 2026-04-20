@@ -19,6 +19,7 @@ import requests
 import json
 import pandas as pd
 import plotly.graph_objects as go
+import os
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -80,10 +81,15 @@ st.markdown("""
 #    In production: GATEWAY_URL and GATEWAY_KEY are set as environment vars.
 # ─────────────────────────────────────────────────────────────────────────────
 GATEWAY_URL = "https://adityajaiswal440-neral-ai-backend.hf.space/v1/predict"
-GATEWAY_KEY = "[REDACTED — set NERAL_SECRET in HF Space environment]"
+
+# Fetch from environment variable; default to None for safety
+NERAL_API_KEY = os.getenv("NERAL_API_KEY")
+
+if not NERAL_API_KEY:
+    raise EnvironmentError("CRITICAL: NERAL_API_KEY not found in environment.")
 
 GATEWAY_HEADERS = {
-    "x-api-key": GATEWAY_KEY,
+    "x-api-key": NERAL_API_KEY,
     "Content-Type": "application/json",
 }
 

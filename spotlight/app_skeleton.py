@@ -137,17 +137,23 @@ app.add_middleware(
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 7. API KEY AUTHENTICATION
-#    Secret injected via NERAL_SECRET environment variable (HF Space settings).
-#    Never hardcoded in source. Validated via FastAPI Security dependency —
-#    the dependency is declared at endpoint level, not middleware level, so
+#    Secret injected via NERAL_API_KEY environment variable (HF Space settings).
+#    Hard EnvironmentError on startup if variable is absent — server will not
+#    start in an unauthenticated state. Validated via FastAPI Security dependency;
 #    unauthenticated requests are rejected before entering the inference graph.
 # ─────────────────────────────────────────────────────────────────────────────
-_API_KEY_STORE = os.getenv("NERAL_SECRET")  # Must be set; no fallback in production
+
+# Fetch from environment variable; default to None for safety
+NERAL_API_KEY = os.getenv("NERAL_API_KEY")
+
+if not NERAL_API_KEY:
+    raise EnvironmentError("CRITICAL: NERAL_API_KEY not found in environment.")
+
 _api_key_header = APIKeyHeader(name="x-api-key", auto_error=False)
 
 
 def require_api_key(header_key: str = Security(_api_key_header)) -> str:
-    if header_key and header_key == _API_KEY_STORE:
+    if header_key and header_key == NERAL_API_KEY:
         return header_key
     raise HTTPException(status_code=403, detail="Security Key Mismatch.")
 
