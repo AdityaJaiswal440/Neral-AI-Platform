@@ -123,7 +123,7 @@ feature_names = [c.split('__')[-1] for c in PREPROCESSORS[sector].get_feature_na
 
 The top churn driver is then:
 
-$$\hat{j}^{*} = \underset{j \;\in\; \mathcal{F}}{\arg\max} \; \phi_j \quad \Rightarrow \quad \texttt{trigger\_diagnosis} = \mathrm{name}(\hat{j}^{*})$$
+$$\hat{j}^{\,*} = \underset{j \in \mathcal{F}}{\arg\max} \; \phi_j \qquad \Rightarrow \qquad \mathtt{trigger} = \mathrm{name}(\hat{j}^{\,*})$$
 
 ---
 
